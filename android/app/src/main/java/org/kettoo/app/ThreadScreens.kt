@@ -28,38 +28,6 @@ import java.io.File
 import java.util.UUID
 
 private fun age(at:Long):String{val m=((System.currentTimeMillis()-at)/60000).coerceAtLeast(0);return if(m<1)"just now" else if(m<60)"${m}m ago" else "${m/60}h ago"}
-@Composable fun PhaseLocation(app: KettooApplication) {
-    val ops by app.operations.state.collectAsStateWithLifecycle()
-    var open by remember { mutableStateOf(false) }
-    var floor by remember { mutableStateOf("") }
-    val data = ops.snapshot ?: return
-    val check = data.optJSONObject("checkin")
-    TextButton({ open = true }, Modifier.fillMaxWidth().heightIn(min = 44.dp),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Icon(Icons.Outlined.LocationOn, null, Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(check?.optString("zone_name") ?: "My location · unknown", Modifier.weight(1f), fontSize = 14.sp)
-            if (check != null) Text(age(check.getLong("reported_at")), fontSize = 12.sp, color = Color.DarkGray)
-        }
-    }
-    if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text("My location") },
-        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Select your floor and zone. Your communication team stays the same.", fontSize = 12.sp)
-            data.getJSONArray("floors").objects().forEach { f ->
-                OutlinedButton({ floor = f.getString("id") }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                    Text(f.getString("name") + if (floor == f.getString("id")) " ✓" else "")
-                }
-            }
-            data.getJSONArray("zones").objects().filter { it.getString("floor_id") == floor }.forEach { zone ->
-                Button({ app.run { app.operations.checkin(zone.getString("id")) }; open = false }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                    Text(zone.getString("name"))
-                }
-            }
-            if (!ops.live) Text("Update will be queued until the server reconnects.", fontSize = 12.sp)
-        } }, confirmButton = { TextButton({ open = false }) { Text("Close") } })
-}
-
 @Composable fun PhaseComms(app: KettooApplication, onConversationSelected: () -> Unit = {}) {
     val ops by app.operations.state.collectAsStateWithLifecycle()
     val s by app.state.collectAsStateWithLifecycle()

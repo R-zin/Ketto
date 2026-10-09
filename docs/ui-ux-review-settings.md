@@ -1,6 +1,6 @@
 # Ketto Android: Settings review
 
-Review date: 10 October 2026. This is the second screen review after the installed Comms refactor. No Settings refactor or location behavior change has been implemented in this review round.
+Review date: 10 October 2026. This is the second screen review after the installed Comms refactor. The user approved the grouped preview, and the Settings refactor and location feedback are now implemented and installed on CPH2613.
 
 ## Location question
 
@@ -45,4 +45,25 @@ Preview shows Account & duty, Audio, Push to talk, Connection, App and separate 
 
 Inspected image for group order, primary controls, concise readable explanations, preserved wordmark and three-item navigation without a falsely selected bottom destination while in Settings.
 
-Next: user's visual review of the Settings image, then implement and install, following the same workflow used for Comms. Include the location empty-state explanation in an agreed UI follow-up. Maintain expanded advanced details and all existing hardware/permission/audio/Nearby behavior, even though the preview hides their long explanations.
+The user approved the Settings image and instructed implementation. Advanced details and all existing hardware/permission/audio/Nearby behavior remain available even though the main page hides the long explanations.
+
+## Implementation
+
+- Extracted `SettingsScreen.kt` from the activity's inline branch. Five groups contain Account & duty, Audio, Push to talk, Connection and App. Sign out remains a separate final action.
+- Duty switch uses the existing permission/service flow. Nearby uses the existing Bluetooth/microphone/Wi-Fi permission and enable flow, including automatic duty start and failover. Hardware PTT still cancels active hardware input and persists its preference through the vault. Video-conservation behavior is unchanged.
+- Audio output choices, background-key setup, Nearby requirements and transcript explanation expand inline. Listening volume still controls STREAM_VOICE_CALL. Monochrome switch/slider colors and readable section/row labels match the reviewed direction.
+- Pocket Mode remains an action enabled only when on duty with hardware PTT. Existing system-accessibility setup, manufacturer/restricted-settings guidance, direct-range limits, automatic retry, eight-hour offline credential expiry and server-only private calls/acknowledgements remain discoverable.
+- `LocationUi.kt` explains the Floor → Zone check-in flow and shows an explicit no-zones message. Floor selection never reports a confirmed location. Queued/rejected check-ins remain distinct from confirmed or cached last-confirmed locations; the last confirmed timestamp is available in the dialog.
+- Settings scroll/expanded-state restoration is scoped to the signed-in account. No backend, transport, protocol, storage-schema or media-coordinator changes were made.
+
+Build: `assembleDebug assembleDebugAndroidTest lintDebug` passed. Lint has 23 general/existing warnings and no errors. App installed in place on CPH2613 with `adb install -r`; the original signing/application identity and version 0.3.0 are retained.
+
+Final APK SHA-256: `8DD512D5748BCF658034F8F5C2B85F2AE16FD44655236AE9546F36BD9BCE0AE3`.
+
+Regression checks cover existing Comms eligibility/navigation/keyboard behavior and queued/rejected/cached location presentation. A new Settings scroll automation test proved unreliable on this phone due to Compose virtual nodes and clipped targets, so it was removed rather than retained as a failing/flaky test. Settings sections, inline background/Nearby expansion, preserved explanations, Sign out reachability and the Floor 1 empty state were reviewed manually using ADB UI inspection and screenshots. No setting toggle, duty start, transmission, call, message, queue retry, logout or check-in was initiated during this manual review.
+
+Final screenshots under `artifacts/ui-review/2026-10-10/`: `cph2613-settings-installed-final-top.png`, `cph2613-settings-installed-final-middle.png`, `cph2613-settings-installed-final-bottom.png`, and `cph2613-location-floor1-fixed.png`. The location dialog now explicitly says: No zones available on Floor 1. Ask an admin to add zones. A real check-in still requires a configured zone, as the existing backend requires.
+
+The final accessibility adjustment merges each switch/expandable row's label and state with its control semantics. Full TalkBack, hardware key, live audio, calls and two-phone failover acceptance remain user/device checks, distinct from this layout/navigation review. Only CPH2613 is currently connected.
+
+Final regression run on the installed build: **OK (11 tests)**. Settings is left open at the top for the user's review. Actual app controls still use the existing permission/coordinator callbacks; this UI verification does not claim end-to-end microphone/media acceptance.

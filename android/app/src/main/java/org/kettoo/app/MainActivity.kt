@@ -7,11 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.media.AudioManager
-import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.LocalActivity
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -66,6 +63,7 @@ class MainActivity:ComponentActivity(){
     fun enableNearby(){app.nearby.enable(true);if(!app.state.value.duty)app.duty(true)}
     val bluetoothEnable=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->if(result.resultCode==android.app.Activity.RESULT_OK)enableNearby()else app.error(Exception("Turn on Bluetooth to connect Nearby"))}
     val nearbyPermissions=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){granted->if(granted.filterKeys{it!=Manifest.permission.POST_NOTIFICATIONS}.values.all{it}){val adapter=app.getSystemService(BluetoothManager::class.java)?.adapter;if(adapter==null)app.error(Exception("Bluetooth is unavailable on this device"))else if(adapter.isEnabled)enableNearby()else bluetoothEnable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))}else app.error(Exception("Nearby and microphone permissions are required"))}
+    fun changeNearby(enabled:Boolean){if(!enabled)app.nearby.enable(false)else nearbyPermissions.launch(buildList{add(Manifest.permission.RECORD_AUDIO);if(Build.VERSION.SDK_INT>=31){add(Manifest.permission.BLUETOOTH_SCAN);add(Manifest.permission.BLUETOOTH_CONNECT);add(Manifest.permission.BLUETOOTH_ADVERTISE)};if(Build.VERSION.SDK_INT>=33){add(Manifest.permission.NEARBY_WIFI_DEVICES);add(Manifest.permission.POST_NOTIFICATIONS)}else{add(Manifest.permission.ACCESS_FINE_LOCATION);add(Manifest.permission.ACCESS_COARSE_LOCATION)}}.toTypedArray())}
     var videoAccept by remember { mutableStateOf<String?>(null) }
     val cameraPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->if(granted)app.run{val pending=videoAccept;videoAccept=null;if(pending!=null)app.api.objectCall("/calls/$pending/accept",json())else app.api.objectCall("/calls",json("conversationId" to s.selected,"video" to true))}else{videoAccept=null;app.error(Exception("Camera permission denied"))}}
     fun duty(){if(s.duty)app.duty(false)else dutyPermissions.launch(buildList{add(Manifest.permission.RECORD_AUDIO);if(Build.VERSION.SDK_INT>=33)add(Manifest.permission.POST_NOTIFICATIONS)}.toTypedArray())}
@@ -79,31 +77,7 @@ class MainActivity:ComponentActivity(){
             "comms"->screenStates.SaveableStateProvider("comms:${s.user!!.getString("id")}"){CommsScreen(app,s,::duty,{page="people"}){video->if(video)cameraPermission.launch(Manifest.permission.CAMERA)else app.run{app.api.objectCall("/calls",json("conversationId" to s.selected,"video" to false))}}}
             "people"->PeopleScreen(app,s){page="comms"}
             "threads"->ThreadsScreen(app)
-            else->Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp),verticalArrangement=Arrangement.spacedBy(20.dp)){
-                Tag("OPERATOR / SESSION");Text(s.user!!.getString("name"),fontSize=27.sp,fontWeight=FontWeight.Bold)
-                Tag(if(s.connected)"SERVER CONNECTED" else "SERVER UNREACHABLE");Tag("${s.mediaRooms.size} AUDIO ROOMS")
-                Action(if(s.duty)"END DUTY" else "START DUTY",::duty)
-                Tag("AUDIO OUTPUT / ${s.audioOutput}")
-                s.audioOutputs.forEach { name -> OutlinedButton({app.media.audioRouting.select(name)},shape=RectangleShape){Text(name)} }
-                ListeningVolume()
-                Row(verticalAlignment=Alignment.CenterVertically){Checkbox(s.hardwarePtt,{v->app.hardware.cancel();app.vault.put("hardwarePtt",v.toString());app.patch{it.copy(hardwarePtt=v)}});Text("Volume Down: hold to talk",fontSize=13.sp)}
-                Text(if(s.hardwarePtt)"Volume Down is PTT while on duty. Volume Up and the listening slider adjust volume."else"Use volume buttons normally, or enable hardware PTT.",fontSize=12.sp,color=Color.Gray)
-                Text("Hardware target: "+(s.conversations.find{it.optString("id")==app.hardware.target()}?.optString("name") ?: "Assigned team"),fontSize=12.sp)
-                Text(if(s.hardwareAvailable)"Background key service enabled"else"Foreground keys work. Enable the optional accessibility service for background keys.",fontSize=11.sp)
-                OutlinedButton({app.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))},shape=RectangleShape){Text("Enable background PTT keys")}
-                Text("Sideloaded apps may need App info → Allow restricted settings. Screen-off keys depend on the phone; Pocket Mode keeps Kettoo awake.",fontSize=11.sp,color=Color.Gray)
-                Action("POCKET MODE",{app.patch{it.copy(pocketMode=true)}},s.duty&&s.hardwarePtt)
-                Text(if(s.speechReady)"Offline English transcription ready"else s.speechError.ifBlank{"Preparing offline English model…"},fontSize=12.sp)
-                Row(verticalAlignment=Alignment.CenterVertically){Checkbox(s.conserve,{v->app.patch{it.copy(conserve=v)}});Text("Conserve data: disable video",fontSize=13.sp)}
-                HorizontalDivider();Tag("NEARBY / DIRECT DEVICE FALLBACK");Text("Automatically connect to nearby teammates during an outage. Live TALK, messages and attachments use direct device connections.",fontSize=13.sp)
-                Tag(s.nearbyStatus)
-                Row(verticalAlignment=Alignment.CenterVertically){Switch(s.nearbyEnabled,{v->if(!v)app.nearby.enable(false)else nearbyPermissions.launch(buildList{add(Manifest.permission.RECORD_AUDIO);if(Build.VERSION.SDK_INT>=31){add(Manifest.permission.BLUETOOTH_SCAN);add(Manifest.permission.BLUETOOTH_CONNECT);add(Manifest.permission.BLUETOOTH_ADVERTISE)};if(Build.VERSION.SDK_INT>=33){add(Manifest.permission.NEARBY_WIFI_DEVICES);add(Manifest.permission.POST_NOTIFICATIONS)}else{add(Manifest.permission.ACCESS_FINE_LOCATION);add(Manifest.permission.ACCESS_COARSE_LOCATION)}}.toTypedArray())});Text("Enable Nearby",Modifier.padding(start=12.dp))}
-                s.peers.forEach{(_,name)->Text("$name · connected",fontSize=13.sp)}
-                Text("Keep Nearby enabled on each teammate’s phone and stay on duty. Connections and queued delivery retry automatically. Bluetooth and Wi-Fi must be on. Only devices in direct range receive live audio; private calls and acknowledgements need the server.",fontSize=12.sp,color=Color.Gray)
-                Text("Offline permissions expire after eight hours. New permissions and revocations require server contact.",fontSize=12.sp,color=Color.Gray)
-                Action("RETRY SERVER QUEUE",{app.run{app.flush()}})
-                Action("SIGN OUT",{app.run{app.logout()}})
-            }
+            else->screenStates.SaveableStateProvider("settings:${s.user!!.getString("id")}"){SettingsScreen(app,s,{enabled->if(enabled!=s.duty)duty()},::changeNearby)}
         }}
         NavigationBar(containerColor=Color.White){listOf("threads" to Icons.Outlined.Forum,"comms" to Icons.Outlined.Radio,"people" to Icons.Outlined.People).forEach{(key,icon)->NavigationBarItem(page==key,{page=key},icon={Icon(icon,null)},label={Text(key.uppercase(),fontSize=12.sp,fontWeight=FontWeight.SemiBold)},colors=NavigationBarItemDefaults.colors(indicatorColor=Color(0xFFE1E1E1)))}}
     }}
@@ -142,5 +116,4 @@ class MainActivity:ComponentActivity(){
         if(m.archived)Tag("ARCHIVED FOR YOU")else if(m.state !in listOf("queued","peer-received"))TextButton({app.run{app.phase3.acknowledge(m)}},enabled=session.connected){Icon(Icons.Outlined.Check,null);Text("Acknowledge & archive",fontSize=11.sp)}
     }
 }
-@Composable private fun ListeningVolume(){val context=LocalContext.current;val audio=remember{context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager};val maximum=audio.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL).coerceAtLeast(1);var volume by remember{mutableFloatStateOf(audio.getStreamVolume(AudioManager.STREAM_VOICE_CALL).toFloat())};Column{Text("Listening volume",fontSize=12.sp);Slider(volume,{volume=it;audio.setStreamVolume(AudioManager.STREAM_VOICE_CALL,it.toInt(),0)},valueRange=0f..maximum.toFloat(),steps=(maximum-1).coerceAtLeast(0))}}
 @Composable private fun CallVideo(app:KettooApplication,track:VideoTrack){val context=androidx.compose.ui.platform.LocalContext.current;val renderer=remember(track){SurfaceViewRenderer(context).also{app.media.callRoom?.initVideoRenderer(it);track.addRenderer(it)}};DisposableEffect(track){onDispose{track.removeRenderer(renderer);renderer.release()}};AndroidView(factory={renderer},modifier=Modifier.fillMaxWidth().height(180.dp))}

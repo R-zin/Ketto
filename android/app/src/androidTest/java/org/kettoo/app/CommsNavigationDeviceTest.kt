@@ -62,7 +62,7 @@ class CommsNavigationDeviceTest {
             assertFalse(device.hasObject(By.text("Video call")))
         }
         device.findObject(By.desc("Settings")).click()
-        assertTrue(device.wait(Until.hasObject(By.text("OPERATOR / SESSION")), 5000))
+        assertTrue(device.wait(Until.hasObject(By.text("ACCOUNT & DUTY")), 5000))
         device.findObject(By.text("THREADS")).click()
         assertTrue(device.wait(Until.hasObject(By.text("Follow through.")), 5000))
         device.findObject(By.text("COMMS")).click()
