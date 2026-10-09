@@ -4,7 +4,7 @@ The official project submission repository for **DEFINE 4.0 — The World's Real
 
 ---
 
-# < Project Name >
+# Ketto
 
 <!-- Add your project cover image below -->
 
@@ -12,17 +12,17 @@ The official project submission repository for **DEFINE 4.0 — The World's Real
 
 ## Team Information
 
-- **Team Name**:
-- **Track**:
+- **Codio**:
+- **Software**:
 
 ## Team Members
 
 | Name | Role | GitHub | LinkedIn |
 |------|------|--------|----------|
-| Full Name | Role | [@username](https://github.com/username) | [Profile](https://linkedin.com/in/username) |
-| Full Name | Role | [@username](https://github.com/username) | [Profile](https://linkedin.com/in/username) |
-| Full Name | Role | [@username](https://github.com/username) | [Profile](https://linkedin.com/in/username) |
-| Full Name | Role | [@username](https://github.com/username) | [Profile](https://linkedin.com/in/username) |
+| Razin M | Team Lead| [@R-zin](https://github.com/R-zin) | [Profile](https://linkedin.com/in/username) |
+| Steve Sony Jacob | ML lead| [@SteveSonyJacob](https://github.com/SteveSonyJacob) | [Profile](https://linkedin.com/in/username) |
+| Harikrishnan S | Android Dev | [@Harikrishnans1124](https://github.com/Harikrishanan1124) | [Profile](https://linkedin.com/in/username) |
+| Navaneeth Krishna B | Core Backend | [@fornkb](https://github.com/fornkb) | [Profile](https://linkedin.com/in/username) |
 
 ---
 
