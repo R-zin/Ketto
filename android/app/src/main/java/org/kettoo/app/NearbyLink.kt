@@ -13,6 +13,105 @@ import java.security.*
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.UUID
+import java.io.InputStream
+
+/** Direct, authenticated M-to-N fallback. Enabling arms discovery; TALK owns capture. */
+class NearbyLink(private val app:KettooApplication) {
+    val keys=NearbyKeys()
+    val audio=NearbyAudio(app,this)
+    private val client=Nearby.getConnectionsClient(app)
+    private val service="org.kettoo.app.private.v2"
+    private data class Peer(val device:String,val nonce:String=UUID.randomUUID().toString(),var claims:JSONObject?=null,var credential:String="",var remoteNonce:String="",var ready:Boolean=false,val started:Long=System.currentTimeMillis(),val metadata:MutableMap<Long,JSONObject> = mutableMapOf(),val files:MutableMap<Long,Payload> = mutableMapOf(),val completed:MutableSet<Long> = mutableSetOf(),val sent:MutableMap<String,Pair<LocalMessage,Long>> = mutableMapOf())
+    private val peers=mutableMapOf<String,Peer>()
+    private val discovered=mutableMapOf<String,String>()
+    private val attempts=mutableMapOf<String,Long>()
+    private var running=false
+    private var starting=false
+    private var owner=""
+    private var retryAfter=0L
+    private var pump:Job?=null
+    var enabled=false;private set
+    fun initialize(){enabled=app.vault.get("nearbyEnabled")=="true";app.patch{it.copy(nearbyEnabled=enabled)};pump=app.scope.launch{while(isActive){delay(1500);runCatching{update()}.onFailure{stopRadios();retryAfter=System.currentTimeMillis()+10000;app.patch{s->s.copy(nearbyStatus=it.message ?: "Nearby unavailable")}}}}}
+    fun enable(value:Boolean){enabled=value;app.vault.put("nearbyEnabled",value.toString());app.patch{it.copy(nearbyEnabled=value)};if(!value)stopRadios()else app.run{update()}}
+    fun start()=enable(true)
+    fun stop(){stopRadios()}
+    private fun now()=System.currentTimeMillis()
+    fun credential(raw:String):JSONObject {
+        val parts=raw.split('.');require(parts.size==2){"Reconnect to refresh Nearby permissions"}
+        require(NearbyKeys.verify(app.vault.get("issuer"),parts[0],parts[1],"RSA")){"Peer is not signed by this organisation"}
+        val claims=JSONObject(String(Base64.decode(parts[0],Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)))
+        require(claims.getLong("expiresAt")>now()){ "Nearby permissions expired; reconnect to the server" }
+        require(claims.getString("org")==NearbyKeys.hash(app.vault.get("issuer").toByteArray()))
+        return claims
+    }
+    private fun own()=credential(app.vault.get("credential")).also{require(it.getString("device")==app.vault.get("device"))}
+    private fun endpointName()="k2|${own().getString("org").take(16)}|${app.vault.get("device") }"
+    private fun device(name:String):String? {val parts=name.split('|');return if(parts.size==3&&parts[0]=="k2"&&parts[1]==own().getString("org").take(16)&&runCatching{UUID.fromString(parts[2])}.isSuccess&&parts[2]!=app.vault.get("device"))parts[2]else null}
+    private fun fallback():Boolean {val s=app.state.value;return enabled&&s.user!=null&&s.duty&&(!s.connected||s.conversations.any{it.optBoolean("mediaAllowed",true)&&it.getString("id") !in s.mediaRooms})}
+    private suspend fun update(){
+        if(!fallback()){stopRadios();app.patch{it.copy(nearbyStatus=if(enabled)"ARMED · ${if(it.duty)"SERVER AVAILABLE"else"START DUTY TO CONNECT"}"else"OFF")};return}
+        if(now()<retryAfter)return
+        own()
+        if(!running&&!starting){starting=true;try{owner=app.vault.get("device");client.startAdvertising(endpointName(),service,lifecycle,AdvertisingOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()).await();client.startDiscovery(service,discovery,DiscoveryOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()).await();running=true}finally{starting=false}}
+        if(owner!=app.vault.get("device")){stopRadios();return}
+        peers.toMap().forEach{(id,p)->if(!p.ready&&now()-p.started>10000||p.ready&&runCatching{credential(p.credential)}.isFailure)drop(id)}
+        discovered.toMap().forEach{(id,d)->if(id !in peers&&app.vault.get("device")<d&&now()-(attempts[id] ?: 0)>7000)connect(id)}
+        if(!audio.occupied){val uid=app.state.value.user!!.getString("id");for(m in app.dao.outbox(uid))if(m.sender==uid&&m.kind in listOf("text","voice","ptt","image","video"))send(m)}
+        publish()
+    }
+    fun connect(id:String){if(!running||id in peers)return;val d=discovered[id] ?: return;attempts[id]=now();peers[id]=Peer(d);client.requestConnection(endpointName(),id,lifecycle).addOnFailureListener{drop(id)}}
+    private fun stopRadios(){if(!running&&!starting&&peers.isEmpty())return;running=false;audio.stopAll();client.stopAdvertising();client.stopDiscovery();client.stopAllEndpoints();peers.clear();discovered.clear();attempts.clear();publish()}
+    private fun drop(id:String){audio.disconnected(id);peers.remove(id);attempts[id]=now();client.disconnectFromEndpoint(id);publish()}
+    private fun publish(){val ready=peers.filterValues{it.ready}.mapValues{(_,p)->p.claims!!.optString("name","Teammate")};app.patch{it.copy(peers=ready,authenticatedPeer=ready.keys.firstOrNull(),nearbyStatus=if(!running)if(enabled)"ARMED"else"OFF"else if(ready.isEmpty())"SEARCHING FOR TEAMMATES"else"${ready.size} TEAMMATE${if(ready.size==1)""else"S"} CONNECTED · NEARBY")}}
+    private val discovery=object:EndpointDiscoveryCallback(){override fun onEndpointFound(id:String,info:DiscoveredEndpointInfo){runCatching{device(info.endpointName)?.let{discovered[id]=it;if(app.vault.get("device")<it)connect(id)}}};override fun onEndpointLost(id:String){discovered.remove(id)}}
+    private val lifecycle=object:ConnectionLifecycleCallback(){
+        override fun onConnectionInitiated(id:String,info:ConnectionInfo){val d=runCatching{device(info.endpointName)}.getOrNull();if(!running||d==null||peers.any{it.key!=id&&it.value.device==d}){client.rejectConnection(id);return};peers.getOrPut(id){Peer(d)};client.acceptConnection(id,payloads).addOnFailureListener{drop(id)}}
+        override fun onConnectionResult(id:String,result:ConnectionResolution){if(!result.status.isSuccess){drop(id);return};app.run{val p=peers[id] ?: return@run;control(id,json("type" to "hello","credential" to app.vault.get("credential"),"nonce" to p.nonce))}}
+        override fun onDisconnected(id:String){drop(id)}
+    }
+    private fun challenge(sender:String,receiver:String,a:String,b:String)="kettoo-v2|$sender|$receiver|$a|$b"
+    suspend fun control(id:String,body:JSONObject){require(id in peers);val bytes=body.toString().toByteArray();require(bytes.size<32000);client.sendPayload(id,Payload.fromBytes(bytes)).await()}
+    fun sendControl(id:String,body:JSONObject){app.run{runCatching{control(id,body)}.onFailure{drop(id)}}}
+    fun remoteDevice(id:String)=peers[id]?.device ?: ""
+    fun remoteName(id:String)=peers[id]?.claims?.optString("name","Teammate") ?: "Teammate"
+    private fun contains(c:JSONObject,key:String,cid:String)=c.optJSONArray(key)?.let{a->(0 until a.length()).any{a.getString(it)==cid}}==true
+    private fun grant(c:JSONObject,cid:String)=c.optJSONArray("liveConversations")?.objects()?.find{it.optString("id")==cid}
+    fun livePermission(id:String,cid:String,remotePublishes:Boolean):Boolean=runCatching{
+        val p=peers[id] ?: return false;require(p.ready);val local=own();val remote=credential(p.credential);val a=grant(local,cid) ?: return false;val b=grant(remote,cid) ?: return false
+        a.getLong("expiresAt")>now()&&b.getLong("expiresAt")>now()&&a.getString("epoch")==b.getString("epoch")&&(if(remotePublishes)b else a).getBoolean("canPublish")&&app.state.value.conversations.any{it.optString("id")==cid&&it.optBoolean("mediaAllowed",true)}
+    }.getOrDefault(false)
+    fun livePeers(cid:String)=peers.keys.filter{livePermission(it,cid,false)}.toSet()
+    fun canTalk(cid:String)=fallback()&&livePeers(cid).isNotEmpty()
+    fun priority(cid:String)=runCatching{grant(own(),cid)?.optInt("priority") ?: 0}.getOrDefault(0)
+    suspend fun stream(id:String,mid:String,cid:String,input:InputStream):Long {val payload=Payload.fromStream(input);control(id,json("type" to "ptt.stream","id" to mid,"cid" to cid,"payloadId" to payload.id));client.sendPayload(id,payload).await();return payload.id}
+    private val payloads=object:PayloadCallback(){
+        override fun onPayloadReceived(id:String,payload:Payload){app.run{try{val p=peers[id] ?: error("Unknown peer");when(payload.type){
+            Payload.Type.BYTES->{val bytes=payload.asBytes()!!;require(bytes.size<32000);handle(id,p,JSONObject(String(bytes)))}
+            Payload.Type.STREAM->{require(p.ready);audio.streamReceived(id,payload.id,payload.asStream()!!.asInputStream())}
+            Payload.Type.FILE->{require(p.ready);require(p.files.size<8);p.files[payload.id]=payload;complete(id,p,payload.id);app.scope.launch{delay(30000);if(p.files.remove(payload.id)!=null){client.cancelPayload(payload.id);p.metadata.remove(payload.id);p.completed.remove(payload.id)}}}
+            else->client.cancelPayload(payload.id)
+        }}catch(e:Exception){drop(id);app.error(e)}}}
+        override fun onPayloadTransferUpdate(id:String,update:PayloadTransferUpdate){app.run{val p=peers[id] ?: return@run;if(audio.ownsStream(update.payloadId))return@run;if(update.totalBytes>10*1024*1024||update.bytesTransferred>10*1024*1024){client.cancelPayload(update.payloadId);p.files.remove(update.payloadId);p.metadata.remove(update.payloadId);return@run};if(update.status==PayloadTransferUpdate.Status.SUCCESS&&(update.payloadId in p.files||update.payloadId in p.metadata)){p.completed.add(update.payloadId);runCatching{complete(id,p,update.payloadId)}.onFailure{drop(id);app.error(it)}}else if(update.status in listOf(PayloadTransferUpdate.Status.FAILURE,PayloadTransferUpdate.Status.CANCELED)){p.files.remove(update.payloadId);p.metadata.remove(update.payloadId);p.completed.remove(update.payloadId)}}}
+    }
+    private suspend fun handle(id:String,p:Peer,b:JSONObject){when(val type=b.getString("type")){
+        "hello"->{require(p.claims==null);p.credential=b.getString("credential");p.claims=credential(p.credential);require(p.claims!!.getString("device")==p.device);p.remoteNonce=b.getString("nonce");require(p.remoteNonce.length in 20..80);control(id,json("type" to "proof","signature" to keys.sign(challenge(app.vault.get("device"),p.device,p.remoteNonce,p.nonce))))}
+        "proof"->{val c=p.claims ?: error("No peer credential");require(NearbyKeys.verify(c.getString("publicKey"),challenge(p.device,app.vault.get("device"),p.nonce,p.remoteNonce),b.getString("signature")));p.ready=true;publish()}
+        "message"->{val m=validate(p,b);if(m.getString("kind")=="text")receive(id,p,b,null)else{require(p.metadata.size<8);val pid=b.getLong("payloadId");p.metadata[pid]=b;complete(id,p,pid)}}
+        "receipt"->{require(p.ready);val mid=b.getString("id");val message=p.sent[mid]?.first ?: return;require(b.getString("envelopeHash")==NearbyKeys.hash(message.envelope.toByteArray()));p.sent.remove(mid);app.dao.cache(Cache(receiptKey(message,p),NearbyKeys.hash(message.envelope.toByteArray())));app.dao.find(mid)?.let{if(it.owner==message.owner&&it.state=="queued")app.dao.save(it.copy(state="peer-received"))}}
+        else->{require(p.ready);credential(p.credential);require(type.startsWith("ptt."));audio.handle(id,b)}
+    }}
+    private fun validate(p:Peer,b:JSONObject):JSONObject{
+        require(p.ready);val c=credential(p.credential);val own=own();val envelope=b.getString("envelope");require(NearbyKeys.verify(c.getString("publicKey"),envelope,b.getString("signature"))){"Invalid peer message signature"};val m=JSONObject(envelope);UUID.fromString(m.getString("id"));val cid=m.getString("conversationId");require(contains(c,"publishConversations",cid)&&contains(c,"conversations",cid)&&contains(own,"conversations",cid)&&app.state.value.conversations.any{it.optString("id")==cid});require(m.getLong("createdAt")<=now()+60000&&m.getLong("createdAt")<=c.getLong("expiresAt"));require(m.optString("text").length<=4000);val kind=m.getString("kind");require(kind in listOf("text","voice","ptt","image","video"));if(kind!="text"){require(m.getLong("size") in 1..limit(kind));require(m.optString("mime",if(kind=="voice")"audio/mp4"else"").startsWith(when(kind){"image"->"image/";"video"->"video/";else->"audio/"}))};if(kind=="ptt"){val g=grant(c,cid) ?: error("Missing live permission");require(g.getBoolean("canPublish")&&m.getLong("createdAt")<=g.getLong("expiresAt")&&g.getString("epoch")==grant(own,cid)?.getString("epoch"))};return m
+    }
+    private fun limit(kind:String):Long=when(kind){"image"->5L*1024*1024;"video"->10L*1024*1024;else->1024L*1024}
+    private suspend fun complete(id:String,p:Peer,pid:Long){val b=p.metadata[pid] ?: return;val payload=p.files[pid] ?: return;if(pid !in p.completed)return;val m=validate(p,b);val uri=payload.asFile()?.asUri() ?: error("Missing received file");val extension=when(m.optString("mime")){"audio/wav"->"wav";"audio/mp4"->"m4a";"image/png"->"png";"image/jpeg"->"jpg";"video/mp4"->"mp4";else->"nearby"};val file=File(app.filesDir,"attachments/${m.getString("id")}.$extension");val temp=File(file.path+".partial");try{withContext(Dispatchers.IO){app.contentResolver.openInputStream(uri)!!.use{input->temp.outputStream().use{out->val buffer=ByteArray(8192);var total=0L;while(true){val n=input.read(buffer);if(n<0)break;total+=n;require(total<=limit(m.getString("kind")));out.write(buffer,0,n)}}};require(temp.length()==m.getLong("size"));require(NearbyKeys.hash(temp.readBytes())==m.getString("sha256"));check(temp.renameTo(file))};receive(id,p,b,file)}finally{temp.delete();p.metadata.remove(pid);p.files.remove(pid);p.completed.remove(pid)}}
+    private suspend fun receive(id:String,p:Peer,b:JSONObject,file:File?){val m=validate(p,b);val uid=app.state.value.user!!.getString("id");val mid=m.getString("id");val old=app.dao.find(mid);if(old==null||old.state=="peer-live"&&old.owner==uid&&old.sender==p.claims!!.getString("user")&&old.conversation==m.getString("conversationId")){app.dao.save(LocalMessage(mid,uid,m.getString("conversationId"),p.claims!!.getString("user"),m.getString("kind"),m.optString("text"),m.getLong("createdAt"),"peer-received",file?.absolutePath ?: "",m.optString("mime",if(file!=null)"audio/mp4"else""),envelope=b.getString("envelope"),signature=b.getString("signature"),credential=p.credential,json=json("sender_name" to remoteName(id),"status" to "received").toString(),transcriptState=if(m.getString("kind") in listOf("voice","ptt"))"pending"else""))}else require(old.envelope==b.getString("envelope")||old.state in listOf("server-received","recipient-received","acknowledged")){"Conflicting message ID"};control(id,json("type" to "receipt","id" to mid,"envelopeHash" to NearbyKeys.hash(b.getString("envelope").toByteArray())))}
+    private fun receiptKey(m:LocalMessage,p:Peer)="nearby.receipt.${m.owner}.${m.id}.${p.device}"
+    suspend fun send(m:LocalMessage){for((id,p) in peers.toMap())if(p.ready&&contains(p.claims!!,"conversations",m.conversation)){runCatching{credential(p.credential);credential(m.credential);val hash=NearbyKeys.hash(m.envelope.toByteArray());if(app.dao.cached(receiptKey(m,p))==hash)return@runCatching;val last=p.sent[m.id];if(last!=null&&now()-last.second<30000)return@runCatching;p.sent[m.id]=m to now();val b=json("type" to "message","envelope" to m.envelope,"signature" to m.signature);if(m.kind=="text")control(id,b)else{val f=File(m.filePath);require(f.length() in 1..limit(m.kind));val payload=Payload.fromFile(f);b.put("payloadId",payload.id);control(id,b);client.sendPayload(id,payload).await()}}.onFailure{p.sent.remove(m.id)}}}
+    fun retry(){app.run{update()}}
+    suspend fun placeholder(id:String,mid:String,cid:String,created:Long){val uid=app.state.value.user?.getString("id") ?: return;val p=peers[id] ?: return;if(app.dao.find(mid)==null)app.dao.save(LocalMessage(mid,uid,cid,p.claims!!.getString("user"),"ptt","",created,"peer-live",json=json("sender_name" to remoteName(id),"status" to "live").toString()))}
+    suspend fun saveLive(mid:String,cid:String,created:Long,rawCredential:String,file:File){val claims=credential(rawCredential);if(claims.getString("device")!=app.vault.get("device"))return;val uid=claims.getString("user");val envelope=json("id" to mid,"conversationId" to cid,"kind" to "ptt","text" to "","createdAt" to created,"mime" to "audio/wav","size" to file.length(),"sha256" to NearbyKeys.hash(file.readBytes())).toString();val m=LocalMessage(mid,uid,cid,uid,"ptt","",created,"queued",file.absolutePath,"audio/wav",envelope=envelope,signature=keys.sign(envelope),credential=rawCredential,json=json("status" to "received").toString(),transcriptState="pending");app.dao.save(m);send(m);app.flush()}
+}
 
 class NearbyKeys {
     private val store=KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -27,106 +126,4 @@ class NearbyKeys {
             Signature.getInstance(if(algorithm=="RSA")"SHA256withRSA" else "SHA256withECDSA").run { initVerify(publicKey); update(text.toByteArray()); verify(Base64.decode(signature,if(algorithm=="RSA") Base64.URL_SAFE or Base64.NO_WRAP else Base64.DEFAULT)) }
         }.getOrDefault(false)
     }
-}
-
-/** One authenticated two-device link. It is not a relay, mesh or live voice transport. */
-class NearbyLink(private val app:KettooApplication) {
-    val keys=NearbyKeys()
-    private val client=Nearby.getConnectionsClient(app)
-    private val service="org.kettoo.app.private.v1"
-    private var endpoint:String?=null
-    private var nonce=""
-    private var remoteNonce=""
-    private var remote:JSONObject?=null
-    private var remoteCredential=""
-    private var authenticated=false
-    private var authDeadline:Job?=null
-    private val metadata=mutableMapOf<Long,JSONObject>()
-    private val files=mutableMapOf<Long,Payload>()
-    private val completed=mutableSetOf<Long>()
-    private val sent=mutableMapOf<String,LocalMessage>()
-    private fun credential(raw:String):JSONObject {
-        val parts=raw.split('.'); require(parts.size==2)
-        require(NearbyKeys.verify(app.vault.get("issuer"),parts[0],parts[1],"RSA")) { "Peer is not signed by this organisation" }
-        val body=JSONObject(String(Base64.decode(parts[0],Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)))
-        require(body.getLong("expiresAt")>System.currentTimeMillis()) { "Peer credential expired; reconnect to the server" }
-        require(body.getString("org")==NearbyKeys.hash(app.vault.get("issuer").toByteArray()))
-        return body
-    }
-    fun start() { app.run {
-        require(!app.state.value.connected) { "Nearby fallback is for an unreachable organisation server" }
-        credential(app.vault.get("credential"))
-        client.startAdvertising("Kettoo approved device",service,lifecycle,AdvertisingOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()).await()
-        client.startDiscovery(service,discovery,DiscoveryOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()).await()
-        app.patch { it.copy(nearbyStatus="SEARCHING · DIRECT NOTES & TEXT") }
-    } }
-    fun connect(id:String) { app.run { require(endpoint==null); client.requestConnection("Kettoo approved device",id,lifecycle).await() } }
-    fun stop() { client.stopAdvertising();client.stopDiscovery();client.stopAllEndpoints();reset();app.patch { it.copy(peers=emptyMap(),nearbyStatus="OFF") } }
-    private fun reset() { authDeadline?.cancel(); endpoint=null;authenticated=false;remote=null;remoteCredential="";metadata.clear();files.clear();completed.clear();sent.clear();app.patch { it.copy(authenticatedPeer=null) } }
-    private val discovery=object:EndpointDiscoveryCallback(){
-        override fun onEndpointFound(id:String,info:DiscoveredEndpointInfo){app.patch { it.copy(peers=it.peers+(id to info.endpointName)) }}
-        override fun onEndpointLost(id:String){app.patch { it.copy(peers=it.peers-id) }}
-    }
-    private val lifecycle=object:ConnectionLifecycleCallback(){
-        override fun onConnectionInitiated(id:String,info:ConnectionInfo){
-            if(endpoint!=null && endpoint!=id){client.rejectConnection(id);return}
-            endpoint=id;nonce=UUID.randomUUID().toString();authenticated=false
-            // Nearby transport acceptance precedes application authentication. No content is sent yet.
-            client.acceptConnection(id,payloads).addOnFailureListener { app.error(it);client.disconnectFromEndpoint(id) }
-        }
-        override fun onConnectionResult(id:String,result:ConnectionResolution){if(!result.status.isSuccess){reset();app.patch { it.copy(nearbyStatus="CONNECTION FAILED") };return};app.run {
-            sendBytes(json("type" to "hello","credential" to app.vault.get("credential"),"nonce" to nonce))
-            authDeadline=app.scope.launch { delay(10000);if(!authenticated){client.disconnectFromEndpoint(id);reset();app.error(Exception("Nearby authentication timed out"))} }
-        }}
-        override fun onDisconnected(id:String){if(id==endpoint){reset();app.patch { it.copy(nearbyStatus="DISCONNECTED · CONTENT QUEUED") }}}
-    }
-    private fun challenge(sender:String,receiver:String,receiverNonce:String,senderNonce:String)="kettoo-v1|$sender|$receiver|$receiverNonce|$senderNonce"
-    private suspend fun sendBytes(body:JSONObject){val id=endpoint ?: error("No peer connected");val bytes=body.toString().toByteArray();require(bytes.size<32000);client.sendPayload(id,Payload.fromBytes(bytes)).await()}
-    private val payloads=object:PayloadCallback(){
-        override fun onPayloadReceived(id:String,payload:Payload){app.run {
-            try {
-                require(id==endpoint)
-                if(payload.type==Payload.Type.BYTES){val bytes=payload.asBytes()!!;require(bytes.size<32000);handle(JSONObject(String(bytes)))}
-                else if(payload.type==Payload.Type.FILE){require(authenticated);files[payload.id]=payload;complete(payload.id);app.scope.launch { delay(15000);if(payload.id in files){client.cancelPayload(payload.id);files.remove(payload.id);metadata.remove(payload.id)} }}
-                else client.cancelPayload(payload.id)
-            } catch(e:Exception){client.disconnectFromEndpoint(id);reset();app.error(e)}
-        }}
-        override fun onPayloadTransferUpdate(id:String,update:PayloadTransferUpdate){app.run {
-            if(update.bytesTransferred>1024*1024){client.cancelPayload(update.payloadId);files.remove(update.payloadId);metadata.remove(update.payloadId);return@run}
-            if(update.status==PayloadTransferUpdate.Status.SUCCESS){completed.add(update.payloadId);runCatching { complete(update.payloadId) }.onFailure { app.error(it);client.disconnectFromEndpoint(id) }}
-            else if(update.status==PayloadTransferUpdate.Status.FAILURE || update.status==PayloadTransferUpdate.Status.CANCELED){files.remove(update.payloadId);metadata.remove(update.payloadId);app.error(Exception("Nearby transfer failed; message remains queued"))}
-        }}
-    }
-    private suspend fun handle(body:JSONObject){when(body.getString("type")){
-        "hello"->{require(remote==null);remoteCredential=body.getString("credential");remote=credential(remoteCredential);remoteNonce=body.getString("nonce");require(remoteNonce.length in 20..80);require(remote!!.getString("device")!=app.vault.get("device"));sendBytes(json("type" to "proof","signature" to keys.sign(challenge(app.vault.get("device"),remote!!.getString("device"),remoteNonce,nonce))))}
-        "proof"->{val peer=remote ?: error("No peer credential");require(NearbyKeys.verify(peer.getString("publicKey"),challenge(peer.getString("device"),app.vault.get("device"),nonce,remoteNonce),body.getString("signature"))) { "Peer did not prove device-key ownership" };authenticated=true;authDeadline?.cancel();app.patch { it.copy(authenticatedPeer=endpoint,nearbyStatus="AUTHENTICATED · DIRECT NOTES & TEXT") }}
-        "message"->{val envelope=validate(body);if(envelope.getString("kind")=="text")receive(body,null) else {require(envelope.getString("kind")=="voice");require(envelope.getLong("size") in 1..1024*1024);metadata[body.getLong("payloadId")]=body;complete(body.getLong("payloadId"))}}
-        "receipt"->{require(authenticated);val mid=body.getString("id");val message=sent.remove(mid) ?: return;require(body.getString("envelopeHash")==NearbyKeys.hash(message.envelope.toByteArray()));app.dao.find(mid)?.let{if(it.owner==message.owner)app.dao.save(it.copy(state="peer-received"))};app.patch { it.copy(nearbyStatus="RECIPIENT RECEIVED · ONE PEER") }}
-        else->error("Unknown peer command")
-    }}
-    private fun validate(body:JSONObject):JSONObject {
-        require(authenticated);val peer=remote ?: error("Peer unavailable");credential(remoteCredential)
-        val envelope=body.getString("envelope");require(NearbyKeys.verify(peer.getString("publicKey"),envelope,body.getString("signature"))) { "Invalid message signature" }
-        val m=JSONObject(envelope);UUID.fromString(m.getString("id"));val cid=m.getString("conversationId")
-        require((0 until peer.getJSONArray("publishConversations").length()).any { peer.getJSONArray("publishConversations").getString(it)==cid }) { "Peer cannot publish in this conversation" }
-        val own=credential(app.vault.get("credential"));require((0 until peer.getJSONArray("conversations").length()).any { peer.getJSONArray("conversations").getString(it)==cid });require((0 until own.getJSONArray("conversations").length()).any { own.getJSONArray("conversations").getString(it)==cid });require(app.state.value.conversations.any { it.getString("id")==cid });require(own.getLong("expiresAt")>System.currentTimeMillis());require(m.optString("text").length<=4000)
-        require(m.getLong("createdAt")<=System.currentTimeMillis()+60000)
-        return m
-    }
-    private suspend fun complete(pid:Long){val body=metadata[pid] ?: return;val payload=files[pid] ?: return;if(pid !in completed)return;val m=validate(body);val received=payload.asFile() ?: error("Missing file");val uri=received.asUri() ?: error("Missing received file URI");val file=File(app.filesDir,"attachments/${m.getString("id")}.m4a")
-        withContext(Dispatchers.IO){app.contentResolver.openInputStream(uri)!!.use { input -> file.outputStream().use { output -> val buffer=ByteArray(8192);var total=0;while(true){val n=input.read(buffer);if(n<0)break;total+=n;require(total<=1024*1024);output.write(buffer,0,n)} } };require(file.length()==m.getLong("size"));require(NearbyKeys.hash(file.readBytes())==m.getString("sha256"));require(file.inputStream().use { val header=ByteArray(8);require(it.read(header)==8);header.copyOfRange(4,8).decodeToString() }=="ftyp") }
-        receive(body,file);metadata.remove(pid);files.remove(pid);completed.remove(pid)
-    }
-    private suspend fun receive(body:JSONObject,file:File?){val m=validate(body);val uid=app.state.value.user!!.getString("id");val mid=m.getString("id");val existing=app.dao.find(mid)
-        if(existing==null) app.dao.save(LocalMessage(mid,uid,m.getString("conversationId"),remote!!.getString("user"),m.getString("kind"),m.optString("text"),m.getLong("createdAt"),"peer-received",file?.absolutePath ?: "",if(file!=null)"audio/mp4" else "",envelope=body.getString("envelope"),signature=body.getString("signature"),credential=remoteCredential,transcriptState=if(file!=null)"pending"else""))
-        else require(existing.envelope==body.getString("envelope") || existing.state=="server-received") { "Conflicting message ID" }
-        sendBytes(json("type" to "receipt","id" to mid,"envelopeHash" to NearbyKeys.hash(body.getString("envelope").toByteArray())))
-    }
-    suspend fun send(m:LocalMessage){require(authenticated);val peer=remote ?: error("Peer unavailable");credential(remoteCredential);credential(m.credential);val cid=m.conversation;require((0 until peer.getJSONArray("conversations").length()).any { peer.getJSONArray("conversations").getString(it)==cid }) { "Peer cannot access this conversation" }
-        val own=credential(app.vault.get("credential"));require((0 until own.getJSONArray("publishConversations").length()).any { own.getJSONArray("publishConversations").getString(it)==cid }) { "You cannot publish in this conversation" }
-        sent[m.id]=m;val body=json("type" to "message","envelope" to m.envelope,"signature" to m.signature)
-        if(m.kind=="text")sendBytes(body)
-        else {require(m.kind=="voice");val file=File(m.filePath);require(file.length() in 1..1024*1024);val payload=Payload.fromFile(file);body.put("payloadId",payload.id);sendBytes(body);client.sendPayload(endpoint!!,payload).await()}
-    }
-    fun retry(){app.run { val uid=app.state.value.user!!.getString("id");for(m in app.dao.outbox(uid))if(m.sender==uid && m.kind in listOf("text","voice"))send(m) }}
 }

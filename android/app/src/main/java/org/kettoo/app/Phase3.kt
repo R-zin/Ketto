@@ -28,7 +28,7 @@ class Phase3(private val app:KettooApplication){
     }
     suspend fun prepare(message:LocalMessage):LocalMessage=speechGate.withLock{
         val current=app.dao.find(message.id)?.takeIf{it.owner==message.owner} ?: message
-        if(current.kind!="voice"||current.transcriptState in listOf("ready","unavailable","failed")||current.filePath.isBlank())return@withLock current
+        if(current.kind !in listOf("voice","ptt")||current.transcriptState in listOf("ready","unavailable","failed")||current.filePath.isBlank())return@withLock current
         val result=app.speech.transcribe(File(current.filePath))
         val updated=current.copy(transcript=result.optString("text"),transcriptState=result.getString("state"),transcriptError=result.optString("error"))
         if(current.owner==owner())app.dao.save(updated)
@@ -40,7 +40,7 @@ class Phase3(private val app:KettooApplication){
         try{
             val uid=owner();if(uid.isBlank())return
             // Queued and Nearby audio can gain a transcript without any server connection.
-            for(note in app.dao.outbox(uid).filter{it.kind=="voice"}){
+            for(note in app.dao.outbox(uid).filter{it.kind in listOf("voice","ptt")}){
                 if(app.media.occupied||app.state.value.incoming!=null||uid!=owner())break
                 prepare(note)
             }

@@ -1,5 +1,7 @@
 # Kettoo Phase 3 demo implementation
 
+The 10 October 2026 bug-fixing session adds automatic multi-peer Nearby failover and direct live TALK. See [Nearby failover](docs/nearby-failover.md) for the current behavior and acceptance results; the original Phase 3 verification below is historical.
+
 Updated 9 October 2026. Version **0.3.0** includes the complete implementation through Phase 3 in the private repository [SteveSonyJacob/ketto_pvt](https://github.com/SteveSonyJacob/ketto_pvt). Its local checkout is `work/ketto-pvt`. Existing Phase 2 messages and queues are retained through additive migrations.
 
 This repository starts with a complete source snapshot. Phase 2 and Phase 3 were implemented and verified in `work/ketto-github` before this publication. The original checkout and its `R-zin/Ketto` remote were left unchanged during the move to this private repository. The Phase 2 overview remains a historical record of that earlier local-only state.

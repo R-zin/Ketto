@@ -1,9 +1,10 @@
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config>
+    <base-config cleartextTrafficPermitted="true"><trust-anchors><certificates src="system"/></trust-anchors></base-config>
     <!-- Debug-only acceptance endpoints. This certificate does not change OS trust. -->
-    <domain-config cleartextTrafficPermitted="false">
+    <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">10.80.0.25</domain>
+        <domain includeSubdomains="false">10.80.0.12</domain>
         <trust-anchors><certificates src="@raw/kettoo_demo_ca"/><certificates src="system"/></trust-anchors>
     </domain-config>
     <debug-overrides><trust-anchors><certificates src="user"/></trust-anchors></debug-overrides>

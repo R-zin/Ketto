@@ -29,7 +29,7 @@ class HardwarePtt(private val app:KettooApplication){
         if(consumed||event.repeatCount>0)return true
         consumed=true
         val cid=target()
-        if(!s.connected||cid.isBlank()||cid !in s.mediaRooms||s.recording||s.call?.optString("state") in listOf("ringing","accepted")||app.media.transmissionConversation!=null){errorPulse();return true}
+        if(cid.isBlank()||!(s.connected&&cid in s.mediaRooms||app.nearby.canTalk(cid))||s.recording||s.call?.optString("state") in listOf("ringing","accepted")||app.media.transmissionConversation!=null){errorPulse();return true}
         held=true;val token=++serial;val previousError=s.error
         app.media.press(cid)
         start=app.scope.launch{

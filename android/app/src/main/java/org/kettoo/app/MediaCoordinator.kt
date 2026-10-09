@@ -50,10 +50,12 @@ class MediaCoordinator(private val app: KettooApplication) {
     private val priorities = mutableMapOf<String,Int>()
     private val epochs = mutableMapOf<String,String>()
     val connectedRooms get() = rooms.filterValues { it.state == Room.State.CONNECTED }.keys
-    val occupied get() = lease != null || note != null || callRoom != null || app.state.value.dictating
+    val occupied get() = lease != null || note != null || callRoom != null || app.state.value.dictating || app.nearby.audio.occupied
     var pressGeneration=0L;private set
-    val transmissionConversation get()=lease?.optString("conversation")
-    val transmissionMessage get()=lease?.optString("message")
+    val transmissionConversation get()=lease?.optString("conversation") ?: app.nearby.audio.transmissionConversation
+    val transmissionMessage get()=lease?.optString("message") ?: app.nearby.audio.transmissionMessage
+    fun controlLost(){if(lease!=null)release()}
+    val requestingServer get()=wanted&&!app.nearby.audio.occupied
 
     suspend fun connect(ids: List<String>) {
         for(cid in ids){val epoch=app.state.value.conversations.find{it.optString("id")==cid}?.optString("mediaEpoch","1") ?: "1";if(epochs.containsKey(cid)&&epochs[cid]!=epoch){rooms.remove(cid)?.let{it.disconnect();it.release()};speakers.remove(cid)};epochs[cid]=epoch}
@@ -76,7 +78,7 @@ class MediaCoordinator(private val app: KettooApplication) {
     }
     fun incoming(cid: String, active: Boolean,priority:Int=0) { priorities[cid]=priority;if(active) { speakers.add(cid); stopPlayback();app.speech.stopDictation() } else speakers.remove(cid); route() }
     fun reconcile(channels:List<JSONObject>){
-        transmissionConversation?.let { cid ->
+        lease?.optString("conversation")?.let { cid ->
             val channel=channels.find{it.optString("id")==cid}
             if(channel==null||!channel.optBoolean("pttAllowed",true)||!channel.optBoolean("mediaAllowed",true)||epochs[cid]!=channel.optString("mediaEpoch","1")){
                 app.hardware.cancel();release()
@@ -86,14 +88,14 @@ class MediaCoordinator(private val app: KettooApplication) {
         for(c in channels){val speaker=c.optJSONObject("speaker");if(c.optBoolean("mediaAllowed",true)&&speaker!=null&&speaker.optLong("expires")>System.currentTimeMillis()){val cid=c.getString("id");speakers.add(cid);priorities[cid]=c.optInt("priority")}}
         val incoming=channels.filter{it.getString("id") in speakers}.maxByOrNull{it.optInt("priority")}?.optJSONObject("speaker")
         if(incoming!=null){stopPlayback();app.speech.stopDictation()}
-        app.patch{it.copy(incoming=incoming)};route()
+        app.patch{if(it.incoming?.optBoolean("nearby")==true)it else it.copy(incoming=incoming)};route()
     }
     fun route(subscribed: Pair<String,RemoteAudioTrack>? = null) {
         val selected=app.state.value.selected
         val broadcast=speakers.filter{(priorities[it] ?: 0)>0}.maxByOrNull{priorities[it] ?: 0}
         val target = broadcast ?: if(selected in speakers) selected else speakers.firstOrNull() ?: selected
         fun apply(cid: String, audio: RemoteAudioTrack) {
-            val gain = if(callRoom != null || cid != target) 0.0 else 1.0
+            val gain = if(callRoom != null || app.nearby.audio.occupied || cid != target) 0.0 else 1.0
             if(gain > 0) audio.start()
             audio.setVolume(gain)
         }
@@ -107,6 +109,7 @@ class MediaCoordinator(private val app: KettooApplication) {
             if(!wanted||generation!=pressGeneration)return@withLock
             check(!occupied){"Microphone is already in use"}
             stopPlayback()
+            if((!app.state.value.connected||cid !in connectedRooms)&&app.nearby.canTalk(cid)){app.api.pauseUploads();app.nearby.audio.press(cid);return@withLock}
             app.patch { it.copy(ptt = "REQUESTING") }
             app.api.pauseUploads()
             val room = rooms[cid] ?: error("Audio is not connected")
@@ -123,8 +126,9 @@ class MediaCoordinator(private val app: KettooApplication) {
             maximumJob = scope.launch { delay((l.getLong("deadline") - System.currentTimeMillis()).coerceAtLeast(1)); release() }
         } catch(e: Exception) { wanted=false;app.error(e); stopLocked() }
     } } }
-    fun release() { wanted = false;val generation=++pressGeneration;scope.launch { gate.withLock { if(generation==pressGeneration)stopLocked() } } }
+    fun release() { wanted = false;app.nearby.audio.release();val generation=++pressGeneration;scope.launch { gate.withLock { if(generation==pressGeneration)stopLocked() } } }
     private suspend fun stopLocked() {
+        app.nearby.audio.release()
         leaseJob?.cancel(); maximumJob?.cancel()
         val l = lease; lease = null
         val t = track; track = null
@@ -160,6 +164,7 @@ class MediaCoordinator(private val app: KettooApplication) {
     }
     suspend fun joinCall(call: JSONObject) = gate.withLock {
         app.speech.finishDictation();app.hardware.cancel()
+        app.nearby.audio.stopAll()
         stopPlayback()
         app.api.pauseUploads()
         stopLocked(); check(note == null) { "Finish your voice note before accepting" }
@@ -192,7 +197,7 @@ class MediaCoordinator(private val app: KettooApplication) {
             p.setDataSource(file.absolutePath); p.prepare(); p.setOnCompletionListener { stopPlayback() }; p.setOnErrorListener { _,_,_ -> stopPlayback(); app.error(Exception("Audio playback failed")); true }; p.start()
         } catch(e: Exception) { stopPlayback(); throw e }
     }
-    suspend fun off() { app.speech.finishDictation();app.hardware.cancel();stopPlayback(); wanted = false; speakers.clear(); gate.withLock { stopLocked() }; stopNote(); endCall(); rooms.values.toList().forEach { it.disconnect(); it.release() }; rooms.clear(); app.patch { it.copy(mediaRooms = emptySet()) } }
+    suspend fun off() { app.speech.finishDictation();app.hardware.cancel();app.nearby.audio.stopAll();stopPlayback(); wanted = false; speakers.clear(); gate.withLock { stopLocked() }; stopNote(); endCall(); rooms.values.toList().forEach { it.disconnect(); it.release() }; rooms.clear(); app.patch { it.copy(mediaRooms = emptySet()) } }
 }
 
 /** Saves the same microphone frames used by WebRTC; never opens another recorder. */

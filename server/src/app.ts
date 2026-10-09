@@ -322,7 +322,7 @@ export async function buildApp(
         .object({
           name: z.string().trim().min(2).max(80),
           email: z.string().email().max(200),
-          password: z.string().min(12).max(128),
+          password: z.string().min(6).max(128),
           deviceName: z.string().min(1).max(80),
           publicKey: z.string().max(4096).optional(),
         })
@@ -524,6 +524,7 @@ export async function buildApp(
     cid: string,
     b: z.infer<typeof messageBody>,
     fileUploader = a.id,
+    peerPtt = false,
   ) {
     conversation(a, cid, true);
     const old = message(b.id);
@@ -559,7 +560,7 @@ export async function buildApp(
       cid,
       a.id,
       a.device,
-      b.kind,
+      peerPtt ? "ptt" : b.kind,
       b.text || null,
       b.attachmentId || null,
       b.createdAt,
@@ -1211,6 +1212,23 @@ export async function buildApp(
       user: a.id,
       device: a.device,
       publicKey: d.public_key,
+      name: a.name,
+      // Live rights are distinct from private text/call membership. Sign room
+      // epochs and session expiry so peers cannot invent or extend live access.
+      liveConversations: db.all("SELECT c.* FROM conversations c JOIN members m ON m.conversation_id=c.id WHERE m.user_id=?", a.id)
+        .filter(c => phase.permittedMedia(a, c))
+        .map(c => {
+          const broadcast = db.get("SELECT expires_at FROM broadcast_sessions WHERE conversation_id=?", c.id);
+          const exchange = c.kind === "private" ? phase.exchange() : undefined;
+          return {
+            id: c.id,
+            epoch: String(db.get("SELECT value FROM phase_settings WHERE key=?", "media-epoch:" + c.id)?.value || "1"),
+            canPublish: phase.pttAllowed(a, c),
+            priority: c.kind === "broadcast" ? 10 : 0,
+            expiresAt: Math.min(Date.now() + 8 * 3600_000, broadcast?.expires_at || Infinity,
+              exchange?.conversation_id === c.id ? exchange.expires_at : Infinity),
+          };
+        }),
       publishConversations: db
         .all(
           "SELECT m.conversation_id FROM members m JOIN conversations c ON c.id=m.conversation_id WHERE m.user_id=? AND (c.kind!='broadcast' OR ?='admin')",
@@ -1237,6 +1255,7 @@ export async function buildApp(
           envelope: z.string().max(16000),
           signature: z.string().max(2000),
           attachmentId: identifier.optional(),
+          transcript: transcriptBody.optional(),
         })
         .parse(req.body);
     let credential: any, envelope: any;
@@ -1275,9 +1294,17 @@ export async function buildApp(
       "SELECT id,name,role FROM users WHERE id=?",
       credential.user,
     );
-    if (!["text", "voice"].includes(envelope.kind))
-      fail(400, "Nearby supports text and audio notes");
-    if (envelope.kind === "voice") {
+    if (!["text", "voice", "ptt", "image", "video"].includes(envelope.kind))
+      fail(400, "Unsupported Nearby message type");
+    const peerPtt = envelope.kind === "ptt";
+    if (peerPtt) {
+      const grant = credential.liveConversations?.find((c: any) => c.id === cid && c.canPublish);
+      const epoch = String(db.get("SELECT value FROM phase_settings WHERE key=?", "media-epoch:" + cid)?.value || "1");
+      if (!grant || grant.epoch !== epoch || envelope.createdAt > grant.expiresAt ||
+        !phase.pttAllowed({ ...sender, device: credential.device }, db.get("SELECT * FROM conversations WHERE id=?", cid)))
+        fail(403, "Nearby live audio permission changed or expired");
+    }
+    if (envelope.kind !== "text") {
       const f = db.get(
         "SELECT * FROM files WHERE id=? AND conversation_id=? AND uploader_id=?",
         b.attachmentId || "",
@@ -1286,14 +1313,16 @@ export async function buildApp(
       );
       if (
         !f ||
-        !f.mime.startsWith("audio/") ||
+        !f.mime.startsWith(({voice:"audio/",ptt:"audio/",image:"image/",video:"video/"} as any)[envelope.kind]) ||
         f.sha256 !== envelope.sha256 ||
         f.size !== envelope.size
       )
-        fail(400, "Audio file does not match the signed peer message");
+        fail(400, "Attachment does not match the signed peer message");
     }
     const parsed = messageBody.parse({
       ...envelope,
+      kind: peerPtt ? "voice" : envelope.kind,
+      transcript: b.transcript,
       attachmentId: b.attachmentId,
       delayed: true,
     });
@@ -1302,6 +1331,7 @@ export async function buildApp(
       cid,
       parsed,
       a.id,
+      peerPtt,
     );
     if (a.id !== sender.id) {
       db.run(

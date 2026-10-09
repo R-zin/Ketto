@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { Media } from "../src/media.js";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { hash } from "../src/security.js";
+import { hash, Credentials } from "../src/security.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>, directory: string;
 let admin: any, alice: any, bob: any, outsider: any, channel: string;
@@ -656,4 +656,51 @@ test("invalid transcripts and non-audio retries are rejected", async () => {
   assert.equal((await request("POST",`/api/messages/${mid}/transcript/retry`,{},bob)).statusCode,400);
   const invalid=await request("POST",`/api/conversations/${channel}/messages`,{id:crypto.randomUUID(),kind:"voice",attachmentId:"missing",createdAt:Date.now(),transcript:{state:"ready",text:""}},alice);
   assert.equal(invalid.statusCode,400);
+});
+
+test("Nearby live credentials separate team audio from private text rights", async () => {
+  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
+  const claims=JSON.parse(Buffer.from(issued.credential.split('.')[0],"base64url").toString());
+  assert.equal(claims.name,"Alice");
+  assert.ok(claims.liveConversations.some((c:any)=>c.id===channel&&c.canPublish&&c.epoch==="1"));
+  const privateChat=(await request("POST","/api/private",{userId:bob.id},alice)).json().id;
+  const fresh=(await request("POST","/api/offline/credential",{},alice)).json();
+  const live=JSON.parse(Buffer.from(fresh.credential.split('.')[0],"base64url").toString());
+  assert.ok(live.publishConversations.includes(privateChat));
+  assert.ok(!live.liveConversations.some((c:any)=>c.id===privateChat));
+  const envelope=JSON.stringify({id:crypto.randomUUID(),conversationId:privateChat,kind:"ptt",createdAt:Date.now()});
+  const result=await request("POST","/api/offline/sync",{credential:fresh.credential,envelope,signature:sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64")},bob);
+  assert.equal(result.statusCode,403);
+});
+
+test("Nearby PTT replay keeps its identity and transcript across two uploaders and rejects changed live grants", async () => {
+  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
+  const audio=Buffer.concat([Buffer.from("RIFF"),Buffer.alloc(40),Buffer.from([1,0,2,0])]);
+  const upload=async(user:any)=>{const boundary="nearby-ptt";const result=await app.inject({method:"POST",url:`/api/conversations/${channel}/files`,headers:{authorization:"Bearer "+user.token,"content-type":`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ptt.wav"\r\nContent-Type: audio/wav\r\n\r\n`),audio,Buffer.from(`\r\n--${boundary}--\r\n`)])});assert.equal(result.statusCode,200,result.body);return result.json().id};
+  const data={id:crypto.randomUUID(),conversationId:channel,kind:"ptt",createdAt:Date.now(),size:audio.length,sha256:hash(audio)};
+  const envelope=JSON.stringify(data), signature=sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64");
+  const body={credential:issued.credential,envelope,signature,transcript:{state:"ready",text:"nearby live audio",engine:"vosk-small-en-us-0.15"}};
+  const recipient=await request("POST","/api/offline/sync",{...body,attachmentId:await upload(bob)},bob);
+  assert.equal(recipient.statusCode,200,recipient.body);assert.equal(recipient.json().kind,"ptt");assert.equal(recipient.json().sender_id,alice.id);assert.equal(recipient.json().transcript.text,"nearby live audio");
+  const origin=await request("POST","/api/offline/sync",{...body,attachmentId:await upload(alice)},alice);
+  assert.equal(origin.statusCode,200,origin.body);assert.equal(origin.json().seq,recipient.json().seq);
+  const claims=JSON.parse(Buffer.from(issued.credential.split('.')[0],"base64url").toString());
+  const issuer=new Credentials(directory);
+  for(const change of [(g:any)=>({...g,epoch:"old-epoch"}),(g:any)=>({...g,expiresAt:Date.now()-1000}),(g:any)=>({...g,canPublish:false})]){
+    const credential=issuer.issue({...claims,liveConversations:claims.liveConversations.map(change)});
+    const result=await request("POST","/api/offline/sync",{...body,credential,attachmentId:origin.json().attachment_id},alice);
+    assert.equal(result.statusCode,403,result.body);
+  }
+});
+
+test("Nearby recipients can sync signed images and videos with matching attachment bytes",async()=>{
+  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
+  for(const [kind,mime,bytes] of [["image","image/png",Buffer.from([137,80,78,71,13,10,26,10,0])],["video","video/mp4",Buffer.concat([Buffer.alloc(4),Buffer.from("ftyp"),Buffer.alloc(20)])]] as const){
+    const boundary="nearby-attachment";
+    const uploaded=await app.inject({method:"POST",url:`/api/conversations/${channel}/files`,headers:{authorization:"Bearer "+bob.token,"content-type":`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="attachment"\r\nContent-Type: ${mime}\r\n\r\n`),bytes,Buffer.from(`\r\n--${boundary}--\r\n`)])});
+    assert.equal(uploaded.statusCode,200,uploaded.body);
+    const envelope=JSON.stringify({id:crypto.randomUUID(),conversationId:channel,kind,createdAt:Date.now(),size:bytes.length,sha256:hash(bytes)});
+    const result=await request("POST","/api/offline/sync",{credential:issued.credential,envelope,signature:sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64"),attachmentId:uploaded.json().id},bob);
+    assert.equal(result.statusCode,200,result.body);assert.equal(result.json().kind,kind);
+  }
 });

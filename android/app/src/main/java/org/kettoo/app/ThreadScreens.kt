@@ -28,12 +28,60 @@ import java.io.File
 import java.util.UUID
 
 private fun age(at:Long):String{val m=((System.currentTimeMillis()-at)/60000).coerceAtLeast(0);return if(m<1)"just now" else if(m<60)"${m}m ago" else "${m/60}h ago"}
-@Composable fun PhaseLocation(app:KettooApplication){val ops by app.operations.state.collectAsStateWithLifecycle();var open by remember{mutableStateOf(false)};var floor by remember{mutableStateOf("")};val d=ops.snapshot ?: return;val check=d.optJSONObject("checkin")
- TextButton({open=true},Modifier.fillMaxWidth()){Icon(Icons.Outlined.LocationOn,null);Text(check?.optString("zone_name") ?: "My location · unknown");if(check!=null)Text(" · "+age(check.getLong("reported_at")),fontSize=10.sp)}
- if(open)AlertDialog(onDismissRequest={open=false},title={Text("My location")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Select your floor and zone. Your communication team stays the same.",fontSize=12.sp);d.getJSONArray("floors").objects().forEach{f->OutlinedButton({floor=f.getString("id")},Modifier.fillMaxWidth(),shape=RectangleShape){Text(f.getString("name")+(if(floor==f.getString("id"))" ✓" else ""))}};d.getJSONArray("zones").objects().filter{it.getString("floor_id")==floor}.forEach{z->Button({app.run{app.operations.checkin(z.getString("id"))};open=false},Modifier.fillMaxWidth(),shape=RectangleShape){Text(z.getString("name"))}};if(!ops.live)Text("Update will be queued until the server reconnects.",fontSize=12.sp)}},confirmButton={TextButton({open=false}){Text("Close")}})
+@Composable fun PhaseLocation(app: KettooApplication) {
+    val ops by app.operations.state.collectAsStateWithLifecycle()
+    var open by remember { mutableStateOf(false) }
+    var floor by remember { mutableStateOf("") }
+    val data = ops.snapshot ?: return
+    val check = data.optJSONObject("checkin")
+    TextButton({ open = true }, Modifier.fillMaxWidth().heightIn(min = 44.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Icon(Icons.Outlined.LocationOn, null, Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(check?.optString("zone_name") ?: "My location · unknown", Modifier.weight(1f), fontSize = 14.sp)
+            if (check != null) Text(age(check.getLong("reported_at")), fontSize = 12.sp, color = Color.DarkGray)
+        }
+    }
+    if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text("My location") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Select your floor and zone. Your communication team stays the same.", fontSize = 12.sp)
+            data.getJSONArray("floors").objects().forEach { f ->
+                OutlinedButton({ floor = f.getString("id") }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                    Text(f.getString("name") + if (floor == f.getString("id")) " ✓" else "")
+                }
+            }
+            data.getJSONArray("zones").objects().filter { it.getString("floor_id") == floor }.forEach { zone ->
+                Button({ app.run { app.operations.checkin(zone.getString("id")) }; open = false }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                    Text(zone.getString("name"))
+                }
+            }
+            if (!ops.live) Text("Update will be queued until the server reconnects.", fontSize = 12.sp)
+        } }, confirmButton = { TextButton({ open = false }) { Text("Close") } })
 }
-@Composable fun PhaseComms(app:KettooApplication){val ops by app.operations.state.collectAsStateWithLifecycle();val s by app.state.collectAsStateWithLifecycle();val d=ops.snapshot ?: return;val team=d.optJSONObject("team");val admin=d.optJSONObject("dutyAdmin");val e=d.optJSONObject("exchange")
- Column(Modifier.fillMaxWidth().background(Color.White).padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("TEAM · ${team?.optString("name") ?: "Unassigned"}",fontSize=11.sp,fontWeight=FontWeight.Bold);Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){if(team!=null)OutlinedButton({app.select(team.getString("channel_id"))},Modifier.weight(1f),shape=RectangleShape){Text("Team PTT",fontSize=12.sp)};if(e==null)OutlinedButton({app.run{app.operations.talkAdmin()}},Modifier.weight(1f),enabled=ops.live&&s.duty&&admin?.optBoolean("reachable")==true,shape=RectangleShape){Text(if(admin?.optBoolean("busy")==true)"Admin busy" else "Talk to admin",fontSize=12.sp)}else OutlinedButton({app.select(e.getString("conversation_id"))},Modifier.weight(1f),shape=RectangleShape){Text("Private admin PTT",fontSize=12.sp)}};if(e!=null)TextButton({app.run{app.operations.endExchange()}}){Text("End private exchange",fontSize=11.sp)};Text("Duty admin: ${admin?.optString("name") ?: "Not designated"} · ${if(admin?.optBoolean("reachable")==true)"available" else "unavailable"}",fontSize=10.sp,color=Color.DarkGray)}
+
+@Composable fun PhaseComms(app: KettooApplication, onConversationSelected: () -> Unit = {}) {
+    val ops by app.operations.state.collectAsStateWithLifecycle()
+    val s by app.state.collectAsStateWithLifecycle()
+    val data = ops.snapshot ?: return
+    val team = data.optJSONObject("team")
+    val admin = data.optJSONObject("dutyAdmin")
+    val exchange = data.optJSONObject("exchange")
+    Column(Modifier.fillMaxWidth().background(Color.White).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("TEAM · ${team?.optString("name") ?: "Unassigned"}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (team != null) OutlinedButton({ app.select(team.getString("channel_id")); onConversationSelected() },
+                Modifier.weight(1f), shape = RectangleShape) { Text("Team PTT", fontSize = 13.sp) }
+            if (exchange == null) OutlinedButton({ app.run { app.operations.talkAdmin(); onConversationSelected() } },
+                Modifier.weight(1f), enabled = ops.live && s.duty && admin?.optBoolean("reachable") == true,
+                shape = RectangleShape) { Text(if (admin?.optBoolean("busy") == true) "Admin busy" else "Talk to admin", fontSize = 13.sp) }
+            else OutlinedButton({ app.select(exchange.getString("conversation_id")); onConversationSelected() },
+                Modifier.weight(1f), shape = RectangleShape) { Text("Private admin PTT", fontSize = 13.sp) }
+        }
+        if (exchange != null) TextButton({ app.run { app.operations.endExchange() } }) { Text("End private exchange", fontSize = 13.sp) }
+        Text("Duty admin: ${admin?.optString("name") ?: "Not designated"} · ${if (admin?.optBoolean("reachable") == true) "available" else "unavailable"}",
+            fontSize = 12.sp, color = Color.DarkGray)
+    }
 }
 @Composable private fun PhaseImage(app:KettooApplication,id:String){val ops by app.operations.state.collectAsStateWithLifecycle();val bitmap by produceState<Bitmap?>(null,id,ops.live){value=runCatching{val file=app.operations.image(id);withContext(Dispatchers.IO){val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeFile(file.absolutePath,bounds);val options=BitmapFactory.Options().apply{inSampleSize=(bounds.outWidth/1200).coerceAtLeast(1)};BitmapFactory.decodeFile(file.absolutePath,options)}}.getOrNull()};bitmap?.let{Image(it.asImageBitmap(),"Issue photo",Modifier.fillMaxWidth().heightIn(max=300.dp))}}
 @Composable fun ThreadsScreen(app:KettooApplication){val ops by app.operations.state.collectAsStateWithLifecycle();val session by app.state.collectAsStateWithLifecycle();val d=ops.snapshot;var filter by remember{mutableStateOf("open")};var create by remember{mutableStateOf(false)};var detail by remember{mutableStateOf<JSONObject?>(null)}

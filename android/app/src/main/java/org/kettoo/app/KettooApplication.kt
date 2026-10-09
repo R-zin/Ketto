@@ -23,7 +23,7 @@ data class AppState(
     val recording: Boolean = false, val incoming: JSONObject? = null, val call: JSONObject? = null,
     val localVideo: VideoTrack? = null, val remoteVideo: VideoTrack? = null,
     val error: String = "", val conserve: Boolean = false, val peers: Map<String,String> = emptyMap(),
-    val nearbyStatus: String = "OFF", val authenticatedPeer: String? = null
+    val nearbyStatus: String = "OFF", val authenticatedPeer: String? = null, val nearbyEnabled:Boolean=false
     , val audioOutputs: List<String> = emptyList(), val audioOutput: String = "Not active"
     , val dictating:Boolean=false,val dictationTarget:String="",val speechReady:Boolean=false,val speechError:String="",
     val hardwarePtt:Boolean=false,val hardwareAvailable:Boolean=false,val pocketMode:Boolean=false
@@ -47,6 +47,7 @@ class KettooApplication : Application() {
         media = MediaCoordinator(this); nearby = NearbyLink(this)
         operations=Phase2(this)
         speech=OfflineSpeech(this);phase3=Phase3(this);hardware=HardwarePtt(this)
+        nearby.initialize()
         patch{it.copy(hardwarePtt=vault.get("hardwarePtt")=="true")}
         scope.launch{while(isActive){delay(5000);runCatching{phase3.flush()}}}
         File(filesDir,"attachments").mkdirs()
@@ -57,7 +58,7 @@ class KettooApplication : Application() {
     fun error(e: Throwable) { patch { it.copy(error = e.message ?: "Operation failed") } }
     fun run(block: suspend ()->Unit) { scope.launch { try { block() } catch(e:CancellationException) { throw e } catch(e:Exception) { error(e) } } }
     suspend fun login(server: String, email: String, password: String, name: String? = null) {
-        require(server.startsWith("https://")) { "Use the organisation’s trusted HTTPS address" }
+        require(server.startsWith("https://") || server.startsWith("http://")) { "Use http:// or https://" }
         val oldServer = vault.get("server")
         if(oldServer.isNotEmpty() && oldServer != server.trimEnd('/')) { vault.clearSession(); vault.put("device",""); vault.put("issuer","") }
         vault.put("server",server.trimEnd('/'))
@@ -106,7 +107,8 @@ class KettooApplication : Application() {
                 try {
                     val ticket = api.objectCall("/ws-ticket",json()).getString("ticket")
                     val closed = CompletableDeferred<Unit>()
-                    val request = Request.Builder().url(api.base.replaceFirst("https://","wss://")+"/api/events?ticket="+ticket).build()
+                    val wsUrl = api.base.replaceFirst("https://","wss://").replaceFirst("http://","ws://") + "/api/events?ticket=" + ticket
+                    val request = Request.Builder().url(wsUrl).build()
                     socket = api.http.newWebSocket(request,object:WebSocketListener(){
                         override fun onOpen(webSocket:WebSocket,response:Response) { scope.launch { patch { it.copy(connected=true) }; lastHeartbeat=System.currentTimeMillis(); heartbeat(); runCatching { refresh(); flush() }.onFailure(::error) } }
                         override fun onMessage(webSocket:WebSocket,text:String) { scope.launch { runCatching { event(JSONObject(text)) }.onFailure(::error) } }
@@ -115,7 +117,7 @@ class KettooApplication : Application() {
                     })
                     while(!closed.isCompleted) { delay(10000); if(System.currentTimeMillis()-lastHeartbeat>30000) { socket?.cancel(); break }; heartbeat(); flush(); operations.flush();operations.refresh();val channels=JSONArray(api.call("/conversations")).objects();patch{it.copy(conversations=channels)};media.reconcile(channels); if(state.value.duty) roomSync.withLock { media.connect(channels.filter{it.optBoolean("mediaAllowed",true)}.map { it.getString("id") }) } }
                 } catch(e:Exception) { if(e is CancellationException) throw e }
-                patch { it.copy(connected=false,incoming=null) };operations.offline(); media.release(); delay(3000)
+                patch { if(it.incoming?.optBoolean("nearby")==true)it.copy(connected=false)else it.copy(connected=false,incoming=null) };operations.offline(); media.controlLost(); delay(3000)
             }
         }
     }
@@ -151,10 +153,11 @@ class KettooApplication : Application() {
     suspend fun queue(cid:String,kind:String,text:String="",file:File?=null,mime:String="") {
         val uid=state.value.user?.getString("id") ?: return
         val mid=UUID.randomUUID().toString(); val created=System.currentTimeMillis()
-        val envelope=json("id" to mid,"conversationId" to cid,"kind" to kind,"text" to text,"createdAt" to created,"sha256" to file?.let { NearbyKeys.hash(it.readBytes()) },"size" to file?.length()).toString()
+        val envelope=json("id" to mid,"conversationId" to cid,"kind" to kind,"text" to text,"createdAt" to created,"mime" to mime,"sha256" to file?.let { NearbyKeys.hash(it.readBytes()) },"size" to file?.length()).toString()
         val m=LocalMessage(mid,uid,cid,uid,kind,text,created,"queued",file?.absolutePath ?: "",mime,envelope=envelope,signature=nearby.keys.sign(envelope),credential=vault.get("credential"),transcriptState=if(kind=="voice")"pending"else"")
         dao.save(m)
-        if(state.value.connected) flush() else if(state.value.authenticatedPeer != null && kind in listOf("text","voice")) nearby.send(m)
+        if(state.value.authenticatedPeer != null)nearby.send(m)
+        if(state.value.connected) flush()
     }
     suspend fun flush() {
         if(!state.value.connected || media.occupied || state.value.incoming!=null || !flushing.tryLock()) return
@@ -165,10 +168,10 @@ class KettooApplication : Application() {
                 try {
                     val m=phase3.prepare(queued)
                     if(uid!=state.value.user?.optString("id"))break
-                    if(m.sender!=uid && m.envelope.isNotEmpty()) {
+                    if((m.sender!=uid || m.kind=="ptt") && m.envelope.isNotEmpty()) {
                         var uploaded=m.attachmentId
-                        if(m.kind=="voice" && uploaded.isBlank()) { uploaded=api.upload(m.conversation,File(m.filePath),m.mime); dao.save(m.copy(attachmentId=uploaded)) }
-                        receive(api.objectCall("/offline/sync",json("credential" to m.credential,"envelope" to m.envelope,"signature" to m.signature,"attachmentId" to uploaded.ifBlank { null })))
+                        if(m.kind!="text" && uploaded.isBlank()) { uploaded=api.upload(m.conversation,File(m.filePath),m.mime); dao.save(m.copy(attachmentId=uploaded)) }
+                        receive(api.objectCall("/offline/sync",json("credential" to m.credential,"envelope" to m.envelope,"signature" to m.signature,"attachmentId" to uploaded.ifBlank { null },"transcript" to phase3.metadata(m))))
                         continue
                     }
                     if(state.value.conserve && m.kind=="video") continue
@@ -179,5 +182,5 @@ class KettooApplication : Application() {
             }
         } finally { flushing.unlock() }
     }
-    suspend fun logout() { hardware.cancel();runCatching { api.objectCall("/logout",json()) }; media.off(); nearby.stop(); connectionJob?.cancel(); socket?.close(1000,"Signed out"); vault.clearSession(); operations.clear(); patch { AppState(speechReady=state.value.speechReady,hardwarePtt=vault.get("hardwarePtt")=="true",hardwareAvailable=state.value.hardwareAvailable) }; stopService(Intent(this,DutyService::class.java)) }
+    suspend fun logout() { hardware.cancel();runCatching { api.objectCall("/logout",json()) }; media.off(); nearby.enable(false); connectionJob?.cancel(); socket?.close(1000,"Signed out"); vault.clearSession(); operations.clear(); patch { AppState(speechReady=state.value.speechReady,hardwarePtt=vault.get("hardwarePtt")=="true",hardwareAvailable=state.value.hardwareAvailable) }; stopService(Intent(this,DutyService::class.java)) }
 }
