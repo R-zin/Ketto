@@ -1,0 +1,25 @@
+services:
+  media:
+    image: livekit/livekit-server:v1.9.11
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+  https:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "443:443/tcp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+volumes:
+  caddy_data:
+  caddy_config:

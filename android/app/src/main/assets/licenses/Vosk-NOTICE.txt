@@ -1,0 +1,8 @@
+Kettoo offline speech demo uses the unmodified Vosk engine by Alpha Cephei
+and the unmodified vosk-model-small-en-us-0.15 English acoustic model.
+
+Engine source: https://github.com/alphacep/vosk-api
+Model source and Apache 2.0 listing: https://alphacephei.com/vosk/models
+License: Vosk-Apache-2.0.txt in this directory.
+
+Recognition is automatic. The original audio remains available for review.

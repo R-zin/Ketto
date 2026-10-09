@@ -1,0 +1,18 @@
+{
+    # A local CA is used for the demo profile. Install its root certificate on
+    # each browser/phone; certificate validation must remain enabled.
+    skip_install_trust
+}
+https://kettoo.local {
+    tls internal
+    reverse_proxy host.docker.internal:8787
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Permissions-Policy "microphone=(self), camera=(self), geolocation=()"
+    }
+}
+https://media.kettoo.local {
+    tls internal
+    reverse_proxy host.docker.internal:7880
+}

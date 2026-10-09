@@ -1,0 +1,601 @@
+.communication-dock {
+  border: 1px solid #d8d8d5;
+  background: #fff;
+  margin-bottom: 28px;
+  padding: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: center;
+}
+.communication-dock > .dock-assignment {
+  display: grid;
+  gap: 7px;
+  min-width: 220px;
+}
+.communication-dock strong {
+  font-size: 17px;
+}
+.communication-dock small {
+  color: #666;
+  font-size: 12px;
+}
+.dock-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.broadcast-selector {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  width: 100%;
+  border-top: 1px solid #ddd;
+  padding-top: 16px;
+}
+.broadcast-selector label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.broadcast-selector small {
+  width: 100%;
+}
+.location-control {
+  position: relative;
+  letter-spacing: 0;
+  font-family: Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.location-control button {
+  padding: 8px;
+  font-size: 12px;
+}
+.location-control small {
+  font-size: 10px;
+  color: #666;
+}
+.location-sheet {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  max-width: 90vw;
+  background: white;
+  border: 1px solid #222;
+  padding: 20px;
+  box-shadow: 0 10px 30px #0002;
+}
+.zone-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+.operations select,
+.location-sheet select,
+.communication-dock select {
+  border: 1px solid #aaa;
+  padding: 10px;
+  background: white;
+  min-width: 0;
+  font: inherit;
+}
+.operations label,
+.location-sheet label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.sync-strip {
+  padding: 12px 15px;
+  border-left: 3px solid #31755b;
+  background: #edf5f0;
+  font:
+    10px "Courier New",
+    monospace;
+  letter-spacing: 1px;
+  margin: 20px 0;
+}
+.sync-strip.stale {
+  background: #fff5df;
+  border-color: #a16c1c;
+}
+.operation-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid #ddd;
+  margin-bottom: 22px;
+  background: white;
+}
+.operation-stats > div {
+  padding: 20px;
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  border-right: 1px solid #ddd;
+}
+.operation-stats b {
+  font-size: 30px;
+}
+.map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 20px;
+}
+.map-panel,
+.zone-details,
+.team-assignment {
+  background: #fff;
+  border: 1px solid #ddd;
+  padding: 20px;
+  min-width: 0;
+}
+.map-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+  align-items: end;
+}
+.map-toolbar label {
+  min-width: 140px;
+}
+.floor-frame {
+  border: 1px solid #dededb;
+  background: #f3f3f0;
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 15px;
+}
+.floor-image {
+  position: relative;
+  width: 100%;
+  line-height: 0;
+}
+.floor-image > img {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: none;
+}
+.zone-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  padding: 6px;
+  line-height: 1.2;
+  background: #fffef0;
+  border: 1px solid #555;
+  font-size: 10px;
+  min-width: 80px;
+  box-shadow: 0 2px 6px #0002;
+}
+.zone-marker svg {
+  width: 15px;
+  height: 15px;
+}
+.zone-marker small {
+  font-size: 8px;
+  color: #555;
+}
+.zone-marker.has-issues {
+  border: 2px solid #a46717;
+  background: #fff2d8;
+}
+.issue-markers {
+  position: absolute;
+  transform: translateX(-50%);
+  margin-top: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 160px;
+  line-height: 1;
+}
+.issue-marker {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #555;
+  border-radius: 50%;
+  font-weight: 700;
+}
+.issue-marker.priority-high {
+  background: #fff2d8;
+  color: #82520c;
+}
+.issue-marker.priority-urgent {
+  background: #fce8e5;
+  color: #a22e28;
+  border-color: #a22e28;
+}
+.map-legend {
+  display: block;
+  margin-top: 12px;
+  color: #666;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.map-empty {
+  text-align: center;
+  padding: 35px;
+  color: #777;
+  line-height: 1.5;
+}
+.zone-placement {
+  background: #fff3d6;
+  padding: 12px;
+  margin-bottom: 15px;
+}
+.upload-label {
+  padding: 15px 0;
+  font-weight: 400 !important;
+}
+.upload-label input {
+  padding: 8px;
+  width: 100%;
+  font-size: 11px;
+}
+.zone-volunteer {
+  border-bottom: 1px solid #ddd;
+  padding: 15px 0;
+  display: grid;
+  gap: 7px;
+}
+.zone-volunteer small {
+  font-size: 11px;
+  color: #666;
+}
+.zone-volunteer button {
+  justify-self: start;
+  font-size: 11px;
+  padding: 8px;
+}
+.zone-details h3 {
+  margin-top: 24px;
+}
+.team-assignment {
+  margin-top: 24px;
+}
+.assignment-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid #eee;
+}
+.assignment-row select {
+  max-width: 50%;
+}
+.thread-toolbar {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 24px 0;
+}
+.thread-filters {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.thread-filters button {
+  font-size: 11px;
+  padding: 10px 12px;
+}
+.issue-list {
+  display: grid;
+  gap: 12px;
+}
+.issue-card {
+  width: 100%;
+  text-align: left;
+  justify-content: start;
+  align-items: center;
+  gap: 18px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #ddd;
+}
+.issue-card > div {
+  flex: 1;
+  min-width: 0;
+}
+.issue-card h3 {
+  font-size: 17px;
+  margin-bottom: 7px;
+}
+.issue-card p {
+  font-size: 12px;
+  font-weight: 400;
+  margin-bottom: 8px;
+}
+.issue-card small {
+  font-size: 10px;
+  font-weight: 400;
+  color: #777;
+}
+.issue-card > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+.zone-details .issue-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 16px;
+}
+.zone-details .issue-card > .priority {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.zone-details .issue-card h3 {
+  font-size: 16px;
+}
+.priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  font:
+    700 9px "Courier New",
+    monospace;
+  border: 1px solid #ccc;
+  background: #f1f1ef;
+  flex-shrink: 0;
+}
+.priority.high {
+  background: #fff0d3;
+  color: #875c0b;
+  border-color: #d5b275;
+}
+.priority.urgent {
+  background: #ffe6e1;
+  color: #a33626;
+  border-color: #d49283;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #0007;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.thread-detail {
+  background: #fff;
+  padding: 32px;
+  width: 650px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+  display: grid;
+  gap: 18px;
+  position: relative;
+  border: 1px solid #111;
+}
+.thread-detail h2 {
+  font-size: 28px;
+  margin: 0;
+  padding-right: 45px;
+}
+.thread-detail > img {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+}
+.close-dialog {
+  justify-self: end;
+  font-size: 12px;
+}
+.thread-meta {
+  font:
+    11px "Courier New",
+    monospace;
+  text-transform: uppercase;
+  margin: 0;
+}
+.thread-description {
+  white-space: pre-wrap;
+  margin: 0;
+  font-size: 14px;
+}
+.thread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ownership-note {
+  font-size: 11px;
+  color: #777;
+  margin: 0;
+}
+.thread-reply {
+  border-left: 2px solid #ddd;
+  padding: 5px 15px;
+  background: #fafafa;
+}
+.thread-reply strong {
+  font-size: 12px;
+}
+.thread-reply small {
+  margin-left: 12px;
+  color: #777;
+  font-size: 10px;
+}
+.thread-reply p {
+  white-space: pre-wrap;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.thread-detail textarea {
+  resize: vertical;
+  min-height: 95px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #aaa;
+  font:
+    14px Arial,
+    sans-serif;
+  border-radius: 0;
+}
+.thread-detail input {
+  width: 100%;
+}
+.thread-detail form {
+  display: grid;
+  gap: 12px;
+}
+.form-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.pending-operations {
+  padding: 20px;
+  margin-top: 25px;
+  border: 1px solid #d0b58e;
+  background: #fff8ec;
+}
+.pending-operations > div {
+  display: grid;
+  gap: 5px;
+  padding: 10px 0;
+  border-top: 1px solid #ddcdb5;
+  font-size: 12px;
+}
+.pending-operations small {
+  color: #765d3d;
+  font-size: 11px;
+}
+.pending-operations button {
+  justify-self: start;
+}
+.empty-operations {
+  padding: 40px;
+  border: 1px solid #ddd;
+}
+.operations .inline-form {
+  margin-top: 15px;
+}
+.operations .notice {
+  margin-bottom: 18px;
+}
+.talk {
+  margin-top: 25px !important;
+  margin-bottom: 25px !important;
+}
+.topbar .top-status {
+  gap: 12px;
+}
+.bottom-nav {
+  overflow-x: auto;
+}
+.bottom-nav button {
+  flex-shrink: 0;
+  min-width: 66px;
+}
+@media (max-width: 1000px) {
+  .map-layout {
+    grid-template-columns: 1fr;
+  }
+  .communication-dock {
+    padding: 14px;
+  }
+  .dock-actions {
+    margin-left: 0;
+  }
+  .map-panel,
+  .zone-details {
+    padding: 15px;
+  }
+  .operation-stats > div {
+    padding: 14px;
+  }
+  .location-control small {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .topbar .top-status {
+    display: none;
+  }
+  .communication-dock {
+    margin-bottom: 20px;
+  }
+  .operation-stats b {
+    font-size: 23px;
+  }
+  .operation-stats > div {
+    font-size: 10px;
+    padding: 12px;
+  }
+  .floor-frame {
+    padding: 8px;
+  }
+  .zone-marker {
+    min-width: 45px;
+    padding: 4px;
+    font-size: 8px;
+  }
+  .zone-marker small {
+    display: none;
+  }
+  .issue-card {
+    padding: 14px;
+    gap: 10px;
+  }
+  .issue-card h3 {
+    font-size: 14px;
+  }
+  .modal-backdrop {
+    padding: 10px;
+  }
+  .thread-detail {
+    padding: 20px;
+    max-height: 95vh;
+  }
+  .thread-detail h2 {
+    font-size: 22px;
+  }
+  .map-toolbar {
+    flex-wrap: wrap;
+  }
+  .broadcast-selector {
+    gap: 10px;
+  }
+}
+
+.communication-dock > .mobile-location {
+  display: none;
+}
+@media (max-width: 600px) {
+  .communication-dock > .mobile-location {
+    display: block;
+    width: 100%;
+  }
+  .mobile-location .location-sheet {
+    left: 0;
+    right: auto;
+    max-width: calc(100vw - 48px);
+  }
+}

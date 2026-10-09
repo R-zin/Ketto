@@ -1,0 +1,23 @@
+{
+  "name": "@kettoo/server",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "tsx --test test/*.test.ts",
+    "test:media": "tsx test/live-media.ts",
+    "test:phase2-media": "tsx test/phase2-media.ts"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.3",
+    "@fastify/rate-limit": "11.2.1",
+    "@fastify/static": "10.1.5",
+    "@fastify/websocket": "11.3.3",
+    "fastify": "5.12.5",
+    "livekit-server-sdk": "2.19.1",
+    "zod": "4.6.5"
+  }
+}
