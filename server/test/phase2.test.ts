@@ -165,7 +165,230 @@ async function fixture() {
     },
   };
 }
-test("operational assignment enforces one team and separates private PTT from chat/calls", async () => {
+test("broadcast preparation reuses canonical audiences and refreshes membership after ending", async () => {
+  const f = await fixture();
+  try {
+    const prepare = async (teamIds: string[], everyone = false) => {
+      const response = await f.req(
+        "POST",
+        "/api/admin/broadcasts",
+        { teamIds, everyone },
+        f.admin,
+      );
+      assert.equal(response.statusCode, 200, response.body);
+      return response.json();
+    };
+    const first = await prepare([f.stage.id, f.security.id, f.stage.id]);
+    assert.equal((await prepare([f.security.id, f.stage.id])).id, first.id);
+    const stageOnly = await prepare([f.stage.id]);
+    assert.notEqual(stageOnly.id, first.id);
+    assert.equal(stageOnly.recipientCount, 2);
+    await f.req(
+      "POST",
+      `/api/admin/broadcasts/${stageOnly.id}/end`,
+      {},
+      f.admin,
+    );
+    await f.req(
+      "PUT",
+      `/api/admin/operational-assignments/${f.bob.user.id}`,
+      { teamId: f.security.id },
+      f.admin,
+    );
+    const restarted = await prepare([f.stage.id, f.stage.id]);
+    assert.equal(restarted.id, stageOnly.id);
+    assert.equal(restarted.recipientCount, 1);
+    assert.equal(
+      (
+        await f.req(
+          "GET",
+          `/api/conversations/${stageOnly.id}/messages`,
+          undefined,
+          f.bob,
+        )
+      ).statusCode,
+      403,
+    );
+    const everyone = await prepare([], true);
+    assert.equal((await prepare([f.stage.id], true)).id, everyone.id);
+    assert.notEqual(everyone.id, first.id);
+    const channels = (
+      await f.req("GET", "/api/conversations", undefined, f.admin)
+    ).json();
+    assert.equal(
+      channels.filter((c: any) => c.name.startsWith("Admin broadcast ·"))
+        .length,
+      3,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+test("multiple channels preserve receive and talk access; removing one revokes only that channel", async () => {
+  const f = await fixture();
+  try {
+    const { req, alice, admin, stage, security } = f;
+    const update = (assigned: boolean) =>
+      req(
+        "PUT",
+        `/api/admin/operational-assignments/${alice.user.id}`,
+        { teamId: security.id, assigned },
+        admin,
+      );
+    assert.equal((await update(true)).statusCode, 200);
+    assert.equal((await update(true)).statusCode, 200);
+    await f.connect(alice, [stage.channelId, security.channelId]);
+    const channels = (
+      await req("GET", "/api/conversations", undefined, alice)
+    ).json();
+    for (const cid of [stage.channelId, security.channelId]) {
+      assert.equal(channels.find((c: any) => c.id === cid).pttAllowed, true);
+      assert.equal(
+        (await req("POST", `/api/conversations/${cid}/media-token`, {}, alice))
+          .statusCode,
+        200,
+      );
+    }
+    assert.equal(
+      (await req("GET", "/api/operations", undefined, alice)).json()
+        .channelMemberships.length,
+      2,
+    );
+    for (const cid of [stage.channelId, security.channelId]) {
+      const burst = await req(
+        "POST",
+        `/api/conversations/${cid}/ptt`,
+        {},
+        alice,
+      );
+      assert.equal(burst.statusCode, 200, burst.body);
+      await req(
+        "POST",
+        `/api/conversations/${cid}/ptt/release`,
+        { leaseId: burst.json().leaseId },
+        alice,
+      );
+    }
+    assert.equal(
+      (
+        await req(
+          "PUT",
+          `/api/admin/operational-assignments/${alice.user.id}`,
+          { teamId: security.id, assigned: false },
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    const issueId = randomUUID();
+    assert.equal(
+      (
+        await req(
+          "POST",
+          "/api/threads",
+          {
+            id: issueId,
+            title: "Security update",
+            description: "Check this channel",
+            priority: "normal",
+            audience: "team",
+            teamId: security.id,
+            createdAt: Date.now(),
+          },
+          alice,
+        )
+      ).statusCode,
+      200,
+    );
+    assert.equal(
+      (await req("GET", `/api/threads/${issueId}`, undefined, alice))
+        .statusCode,
+      200,
+    );
+    assert.equal((await update(false)).statusCode, 200);
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/conversations/${security.channelId}/media-token`,
+          {},
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/conversations/${stage.channelId}/media-token`,
+          {},
+          alice,
+        )
+      ).statusCode,
+      200,
+    );
+    assert.equal(
+      (await req("GET", `/api/threads/${issueId}`, undefined, alice))
+        .statusCode,
+      404,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+test("single-channel database migration preserves assignments and supports multiple memberships", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "kettoo-memberships-"));
+  const path = join(directory, "database.sqlite");
+  let store = new Store(path);
+  try {
+    store.run(
+      "INSERT INTO users VALUES('volunteer','Volunteer','v@test.invalid','password','staff',1)",
+    );
+    for (const name of ["stage", "security"]) {
+      store.run("INSERT INTO teams VALUES(?,?)", name, name);
+      store.run(
+        "INSERT INTO conversations(id,name,kind) VALUES(?,?,'channel')",
+        name,
+        name,
+      );
+      store.run("INSERT INTO operational_teams VALUES(?,?,1)", name, name);
+    }
+    store.db.exec(
+      "DROP TABLE operational_assignments; CREATE TABLE operational_assignments(user_id TEXT PRIMARY KEY REFERENCES users(id),team_id TEXT NOT NULL REFERENCES operational_teams(team_id)); INSERT INTO operational_assignments VALUES('volunteer','stage');",
+    );
+    store.db.close();
+    store = new Store(path);
+    assert.equal(
+      store.get(
+        "SELECT team_id FROM operational_assignments WHERE user_id='volunteer'",
+      ).team_id,
+      "stage",
+    );
+    store.run(
+      "INSERT INTO operational_assignments VALUES('volunteer','security')",
+    );
+    assert.equal(
+      store.get(
+        "SELECT COUNT(*) n FROM operational_assignments WHERE user_id='volunteer'",
+      ).n,
+      2,
+    );
+    assert.equal(store.all("PRAGMA foreign_key_check").length, 0);
+    store.db.close();
+    store = new Store(path);
+    assert.equal(
+      store.get(
+        "SELECT COUNT(*) n FROM operational_assignments WHERE user_id='volunteer'",
+      ).n,
+      2,
+    );
+  } finally {
+    store.db.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("legacy assignment replacement separates private PTT from chat/calls", async () => {
   const f = await fixture();
   try {
     const { req, alice, bob, carol, admin, stage, security } = f;

@@ -26,6 +26,26 @@ const ago = (at: number) => {
       : `${Math.floor(minutes / 60)}h ago`;
 };
 const status = (s: string) => s.replaceAll("_", " ");
+const demoFloor = {
+  id: "demo-venue",
+  name: "Demo venue",
+  demo: true,
+  image_id: null,
+};
+const demoZones = [
+  { id: "demo-stage", name: "Stage", x: 0.5, y: 0.245 },
+  { id: "demo-audience", name: "Audience", x: 0.5, y: 0.53 },
+  { id: "demo-registration", name: "Registration", x: 0.15, y: 0.275 },
+  { id: "demo-food", name: "Food court", x: 0.15, y: 0.6 },
+  { id: "demo-first-aid", name: "First aid", x: 0.85, y: 0.275 },
+  { id: "demo-entrance", name: "Entrance", x: 0.5, y: 0.81 },
+].map((zone) => ({
+  ...zone,
+  floor_id: demoFloor.id,
+  demo: true,
+  volunteers: 0,
+  openIssues: 0,
+}));
 export function useOperations(user: any, canSync: boolean) {
   const [data, setData] = useState<any>(),
     [live, setLive] = useState(false),
@@ -284,10 +304,12 @@ export function CommunicationPanel({
   ops,
   user,
   onConversation,
+  onPrepared,
 }: {
   ops: ReturnType<typeof useOperations>;
   user: any;
   onConversation: (cid: string) => void;
+  onPrepared?: () => void;
 }) {
   const d = ops.data,
     [selected, setSelected] = useState<string[]>([]),
@@ -319,35 +341,24 @@ export function CommunicationPanel({
       <div className="mobile-location">
         <LocationControl ops={ops} />
       </div>
-      <div className="dock-assignment">
-        <span className="eyebrow">
-          {user.role === "admin"
-            ? "DUTY ADMIN / LIVE COMMS"
-            : "YOUR ASSIGNMENT"}
-        </span>
-        <strong>
-          {d.team?.name ||
-            (user.role === "admin" ? "Control room" : "Team unassigned")}
-        </strong>
-        <small>
-          Duty admin: {d.dutyAdmin?.name || "Not designated"} ·{" "}
-          {d.dutyAdmin?.reachable
-            ? d.dutyAdmin.busy
-              ? "Busy"
-              : "Available"
-            : "Unavailable"}
-        </small>
-      </div>
+      {user.role !== "admin" && (
+        <div className="dock-assignment">
+          <span className="eyebrow">Your channels</span>
+          <strong>
+            {(d.channelMemberships || []).map((t: any) => t.name).join(", ") ||
+              "No channels assigned"}
+          </strong>
+          <small>
+            Duty admin: {d.dutyAdmin?.name || "Not designated"} ·{" "}
+            {d.dutyAdmin?.reachable
+              ? d.dutyAdmin.busy
+                ? "Busy"
+                : "Available"
+              : "Unavailable"}
+          </small>
+        </div>
+      )}
       <div className="dock-actions">
-        {d.team && (
-          <button
-            className="primary"
-            onClick={() => onConversation(d.team.channel_id)}
-          >
-            <Radio size={16} />
-            Team PTT
-          </button>
-        )}
         {user.role !== "admin" && !d.exchange && (
           <button
             className="outline"
@@ -424,6 +435,7 @@ export function CommunicationPanel({
                   everyone,
                 });
                 onConversation(b.id);
+                onPrepared?.();
               })
             }
           >
@@ -476,15 +488,16 @@ export default function Operations({
     [filter, setFilter] = useState("open"),
     [create, setCreate] = useState(false),
     [floorName, setFloorName] = useState(""),
-    [teamName, setTeamName] = useState(""),
+    [manageVenue, setManageVenue] = useState(false),
     [placing, setPlacing] = useState(false),
     [zoneName, setZoneName] = useState(""),
     [zoneEdit, setZoneEdit] = useState(false),
     [reply, setReply] = useState("");
   const d = ops.data;
+  const floors = [...(d?.floors || []), demoFloor];
   useEffect(() => {
-    if (d?.floors.length && !d.floors.some((f: any) => f.id === floor))
-      setFloor(d.floors[0].id);
+    if (d && !floors.some((f: any) => f.id === floor))
+      setFloor(d.floors.find((f: any) => f.image_id)?.id || demoFloor.id);
   }, [d?.floors, floor]);
   const run = async (fn: () => Promise<any>) => {
     try {
@@ -519,9 +532,11 @@ export default function Operations({
         Connect to the organisation server to load maps and threads.
       </div>
     );
-  const current = d.floors.find((f: any) => f.id === floor),
-    zones = d.zones.filter((z: any) => z.floor_id === floor),
-    activeZone = zone ? d.zones.find((z: any) => z.id === zone.id) : null;
+  const current = floors.find((f: any) => f.id === floor),
+    zones = current?.demo
+      ? demoZones
+      : d.zones.filter((z: any) => z.floor_id === floor),
+    activeZone = zone ? zones.find((z: any) => z.id === zone.id) : null;
   const issues = d.issues.filter(
     (x: any) =>
       filter === "all" ||
@@ -529,29 +544,40 @@ export default function Operations({
       (filter === "team" &&
         (user.role === "admin"
           ? x.audience === "team"
-          : x.team_id === d.team?.id)) ||
+          : (d.channelMemberships || []).some(
+              (t: any) => t.id === x.team_id,
+            ))) ||
       (filter === "mine" && x.owner_id === user.id),
   );
   return (
     <div className="operations">
       <div className="page-title">
         <div>
-          <span className="eyebrow">
-            OPERATIONS / {page === "map" ? "VENUE" : "ISSUE THREADS"}
-          </span>
-          <h1>
-            {page === "map" ? "The venue, at a glance." : "Follow through."}
-          </h1>
+          <h1>{page === "map" ? "Operations" : "Threads"}</h1>
         </div>
-        <button className="outline" onClick={() => void ops.refresh()}>
-          <RefreshCw size={15} />
-          Refresh
-        </button>
+        {page === "map" && user.role === "admin" ? (
+          <button
+            className="outline"
+            aria-expanded={manageVenue}
+            onClick={() => setManageVenue(!manageVenue)}
+          >
+            {manageVenue ? "Done" : "Manage venue"}
+          </button>
+        ) : (
+          <button className="outline" onClick={() => void ops.refresh()}>
+            <RefreshCw size={15} />
+            Refresh
+          </button>
+        )}
       </div>
-      <div className={"sync-strip " + (ops.live ? "live" : "stale")}>
-        {ops.live ? "SERVER SYNCHRONISED" : "CACHED · SERVER UNAVAILABLE"} ·
-        Updated {ago(d.serverAt)} · {ops.pending.length} queued/rejected updates
-      </div>
+      {(!ops.live || ops.pending.length > 0) && (
+        <div className="sync-strip stale">
+          {!ops.live
+            ? "Showing cached data · Server unavailable"
+            : "Updates pending"}{" "}
+          · {ops.pending.length} queued/rejected updates
+        </div>
+      )}
       {ops.error && (
         <div className="notice error" role="alert">
           {ops.error}
@@ -560,27 +586,29 @@ export default function Operations({
       )}
       {page === "map" ? (
         <>
-          <div className="operation-stats">
-            <div>
-              <b>
-                {
-                  d.volunteers.filter((u: any) => u.connected && u.onDuty)
-                    .length
-                }
-              </b>
-              Connected on duty
+          {!current?.demo && (
+            <div className="operation-stats">
+              <div>
+                <b>
+                  {
+                    d.volunteers.filter((u: any) => u.connected && u.onDuty)
+                      .length
+                  }
+                </b>
+                Connected on duty
+              </div>
+              <div>
+                <b>
+                  {d.issues.filter((x: any) => x.status !== "resolved").length}
+                </b>
+                Unresolved issues
+              </div>
+              <div>
+                <b>{d.volunteers.filter((u: any) => !u.checkin).length}</b>
+                Location unknown
+              </div>
             </div>
-            <div>
-              <b>
-                {d.issues.filter((x: any) => x.status !== "resolved").length}
-              </b>
-              Unresolved issues
-            </div>
-            <div>
-              <b>{d.volunteers.filter((u: any) => !u.checkin).length}</b>
-              Location unknown
-            </div>
-          </div>
+          )}
           <div className="map-layout">
             <section className="map-panel">
               <div className="map-toolbar">
@@ -591,25 +619,30 @@ export default function Operations({
                     onChange={(e) => {
                       setFloor(e.target.value);
                       setZone(undefined);
+                      setZoneEdit(false);
+                      setPlacing(false);
                     }}
                   >
-                    {d.floors.map((f: any) => (
+                    {floors.map((f: any) => (
                       <option value={f.id} key={f.id}>
                         {f.name}
                       </option>
                     ))}
                   </select>
                 </label>
-                {user.role === "admin" && current?.image_id && (
-                  <button
-                    className="outline"
-                    onClick={() => setPlacing(!placing)}
-                  >
-                    {placing ? "Cancel placement" : "Place zone marker"}
-                  </button>
-                )}
+                {manageVenue &&
+                  user.role === "admin" &&
+                  current?.image_id &&
+                  !current.demo && (
+                    <button
+                      className="outline"
+                      onClick={() => setPlacing(!placing)}
+                    >
+                      {placing ? "Cancel placement" : "Place zone marker"}
+                    </button>
+                  )}
               </div>
-              {placing && (
+              {manageVenue && placing && !current?.demo && (
                 <label className="zone-placement">
                   Zone name
                   <input
@@ -621,26 +654,33 @@ export default function Operations({
                 </label>
               )}
               <div className="floor-frame">
-                {current?.image_id ? (
+                {current?.image_id || current?.demo ? (
                   <div className="floor-image">
-                    <OperationImage
-                      id={current.image_id}
-                      owner={user.id}
-                      online={ops.live}
-                      onPoint={(x, y) => {
-                        if (placing && zoneName.trim())
-                          void run(async () => {
-                            await api("/admin/zones", {
-                              floorId: floor,
-                              name: zoneName.trim(),
-                              x,
-                              y,
+                    {current.demo ? (
+                      <img
+                        src="/demo-floor-plan.svg"
+                        alt="Demo venue floor plan with stage, audience seating, registration, food court, first aid and entrance"
+                      />
+                    ) : (
+                      <OperationImage
+                        id={current.image_id}
+                        owner={user.id}
+                        online={ops.live}
+                        onPoint={(x, y) => {
+                          if (placing && zoneName.trim())
+                            void run(async () => {
+                              await api("/admin/zones", {
+                                floorId: floor,
+                                name: zoneName.trim(),
+                                x,
+                                y,
+                              });
+                              setPlacing(false);
+                              setZoneName("");
                             });
-                            setPlacing(false);
-                            setZoneName("");
-                          });
-                      }}
-                    />
+                        }}
+                      />
+                    )}
                     {zones.map((z: any) => (
                       <button
                         key={z.id}
@@ -653,12 +693,18 @@ export default function Operations({
                           setZoneName(z.name);
                           setZoneEdit(false);
                         }}
-                        aria-label={`${z.name}: ${z.volunteers} volunteers, ${z.openIssues} open issues`}
+                        aria-label={
+                          z.demo
+                            ? `${z.name}: demo zone`
+                            : `${z.name}: ${z.volunteers} volunteers, ${z.openIssues} open issues`
+                        }
                       >
                         <MapPin size={18} />
                         <span>{z.name}</span>
                         <small>
-                          {z.volunteers} on duty · {z.openIssues} issues
+                          {z.demo
+                            ? "Demo zone"
+                            : `${z.volunteers} on duty · ${z.openIssues} issues`}
                         </small>
                       </button>
                     ))}
@@ -704,30 +750,34 @@ export default function Operations({
                   </div>
                 )}
               </div>
-              {current?.image_id && (
+              {(current?.image_id || current?.demo) && (
                 <small className="map-legend">
-                  Select a zone for volunteers. Numbered markers open unresolved
-                  threads.
+                  {current.demo
+                    ? "Demo illustration · Select a zone to explore. No real locations or issues are shown."
+                    : "Select a zone for volunteers. Numbered markers open unresolved threads."}
                 </small>
               )}
-              {user.role === "admin" && current && (
-                <label className="upload-label">
-                  Upload / replace floor image · PNG/JPEG/WebP, 5 MB
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    disabled={!ops.live}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f)
-                        void run(() =>
-                          phaseUpload("floors/" + floor, f, f.name),
-                        );
-                    }}
-                  />
-                </label>
-              )}
-              {user.role === "admin" && (
+              {manageVenue &&
+                user.role === "admin" &&
+                current &&
+                !current.demo && (
+                  <label className="upload-label">
+                    Upload / replace floor image · PNG/JPEG/WebP, 5 MB
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={!ops.live}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f)
+                          void run(() =>
+                            phaseUpload("floors/" + floor, f, f.name),
+                          );
+                      }}
+                    />
+                  </label>
+                )}
+              {manageVenue && user.role === "admin" && (
                 <form
                   className="inline-form"
                   onSubmit={(e) => {
@@ -752,15 +802,18 @@ export default function Operations({
               )}
             </section>
             <section className="zone-details">
-              <span className="eyebrow">ZONE DETAILS</span>
+              <span className="eyebrow">
+                {current?.demo ? "DEMO ZONE" : "ZONE DETAILS"}
+              </span>
               <h2>{activeZone?.name || "Select a zone"}</h2>
               {activeZone ? (
                 <>
                   <p>
-                    {activeZone.volunteers} connected, on duty ·{" "}
-                    {activeZone.openIssues} unresolved issues
+                    {activeZone.demo
+                      ? "This sample zone is for visualization. Choose your real floor plan to view volunteer locations and issues."
+                      : `${activeZone.volunteers} connected, on duty · ${activeZone.openIssues} unresolved issues`}
                   </p>
-                  {user.role === "admin" && (
+                  {user.role === "admin" && !activeZone.demo && (
                     <button
                       className="outline"
                       onClick={() => setZoneEdit(!zoneEdit)}
@@ -768,7 +821,7 @@ export default function Operations({
                       Edit zone
                     </button>
                   )}
-                  {zoneEdit && (
+                  {zoneEdit && !activeZone.demo && (
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
@@ -832,12 +885,14 @@ export default function Operations({
                 </>
               ) : (
                 <p>
-                  See volunteers and unresolved threads linked to this location.
+                  {current?.demo
+                    ? "Select a zone to explore this sample event venue."
+                    : "See volunteers and unresolved threads linked to this location."}
                 </p>
               )}
-              <h3>Location unknown</h3>
+              {!current?.demo && <h3>Location unknown</h3>}
               {d.volunteers
-                .filter((u: any) => !u.checkin)
+                .filter((u: any) => !current?.demo && !u.checkin)
                 .map((u: any) => (
                   <p key={u.id}>
                     {u.name} · {u.connected ? "connected" : "disconnected"}
@@ -845,69 +900,6 @@ export default function Operations({
                 ))}
             </section>
           </div>
-          <section className="team-assignment">
-            <h2>Operational teams</h2>
-            <form
-              className="inline-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void run(async () => {
-                  await api("/admin/operational-teams", { name: teamName });
-                  setTeamName("");
-                });
-              }}
-            >
-              <input
-                required
-                value={teamName}
-                onChange={(e) => setTeamName(e.target.value)}
-                placeholder="Stage, Security, Entry…"
-              />
-              <button className="primary" disabled={!ops.live}>
-                Create team
-              </button>
-            </form>
-            {d.volunteers.map((u: any) => (
-              <label className="assignment-row" key={u.id}>
-                <strong>{u.name}</strong>
-                <select
-                  value={u.team?.id || ""}
-                  disabled={!ops.live}
-                  onChange={(e) =>
-                    void run(() =>
-                      api(
-                        "/admin/operational-assignments/" + u.id,
-                        { teamId: e.target.value || null },
-                        "PUT",
-                      ),
-                    )
-                  }
-                >
-                  <option value="">Unassigned</option>
-                  {d.teams.map((t: any) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-            <button
-              className="outline"
-              disabled={!ops.live}
-              onClick={() =>
-                void run(() =>
-                  api(
-                    "/admin/duty-admin",
-                    { userId: user.id, deviceId: user.device },
-                    "PUT",
-                  ),
-                )
-              }
-            >
-              Use this browser as duty admin
-            </button>
-          </section>
         </>
       ) : (
         <>
@@ -915,7 +907,7 @@ export default function Operations({
             <div className="thread-filters">
               {[
                 ["open", "Open"],
-                ["team", user.role === "admin" ? "Team only" : "My team"],
+                ["team", user.role === "admin" ? "Channel issues" : "My channels"],
                 ["mine", "Assigned to me"],
                 ["all", "All history"],
               ].map(([k, label]) => (
@@ -1085,7 +1077,9 @@ export default function Operations({
                       .filter(
                         (u: any) =>
                           thread.audience === "everyone" ||
-                          u.team?.id === thread.team_id,
+                          (u.channelMemberships || []).some(
+                            (t: any) => t.id === thread.team_id,
+                          ),
                       )
                       .map((u: any) => (
                         <option key={u.id} value={u.id}>
@@ -1247,17 +1241,20 @@ function ThreadForm({
               onChange={(e) => setAudience(e.target.value)}
             >
               <option value="team" disabled={!team}>
-                {user.role === "admin" ? "Selected team" : "My team"}
+                {"Selected channel"}
               </option>
               <option value="everyone">Everyone</option>
             </select>
           </label>
         </div>
-        {audience === "team" && user.role === "admin" && (
+        {audience === "team" && (
           <label>
-            Team
+            Channel
             <select value={team} onChange={(e) => setTeam(e.target.value)}>
-              {data.teams.map((t: any) => (
+              {(user.role === "admin"
+                ? data.teams
+                : data.channelMemberships || []
+              ).map((t: any) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>

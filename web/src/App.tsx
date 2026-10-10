@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { Fragment, useState, useEffect, useRef, useCallback } from "react";
 import {
   Radio,
   Mic,
   MessageSquare,
   Users,
-  Settings,
   LogOut,
   ArrowRight,
   Lock,
@@ -33,20 +32,18 @@ import {
 import { Coordinator } from "./media";
 import Operations, {
   useOperations,
-  LocationControl,
   CommunicationPanel,
+  LocationControl,
 } from "./Operations";
 import "./operations.css";
+import Organisation from "./Organisation";
 
 const time = (n: number) =>
   new Date(n).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 function Mark() {
   return (
     <span className="brand">
-      <Radio size={28} />
-      <strong>
-        KETTO<span className="badge">SECURE</span>
-      </strong>
+      <img src="/kettoo-logo.png" alt="Kettoo" />
     </span>
   );
 }
@@ -243,7 +240,6 @@ export default function App() {
   const [user, setUser] = useState<any>(),
     [loading, setLoading] = useState(!!access),
     [page, setPage] = useState("comms"),
-    [tab, setTab] = useState("voice"),
     [conversations, setConversations] = useState<any[]>([]),
     [selected, setSelected] = useState(""),
     [people, setPeople] = useState<any[]>([]),
@@ -261,11 +257,13 @@ export default function App() {
     [incoming, setIncoming] = useState<any>(),
     [recording, setRecording] = useState(false),
     [conserve, setConserve] = useState(false),
-    [newName, setNewName] = useState("");
-  const [audience, setAudience] = useState<any[]>([]);
+    [broadcastOpen, setBroadcastOpen] = useState(false);
   const [archived, setArchived] = useState(false);
-  const isArchived = (m: any) => m.receipts?.some((r: any) => r.user_id === user?.id && r.state === "acknowledged");
-  const visibleMessages = messages.filter(m => !!isArchived(m) === archived);
+  const isArchived = (m: any) =>
+    m.receipts?.some(
+      (r: any) => r.user_id === user?.id && r.state === "acknowledged",
+    );
+  const visibleMessages = messages.filter((m) => !!isArchived(m) === archived);
   const coordinator = useRef(new Coordinator()).current,
     socket = useRef<WebSocket | undefined>(undefined),
     session = useRef({ duty: false, selected: "", user: null as any }),
@@ -274,8 +272,41 @@ export default function App() {
     recorder = useRef<MediaRecorder | undefined>(undefined),
     noteStream = useRef<MediaStream | undefined>(undefined),
     fileInput = useRef<HTMLInputElement>(null);
+  const messageLog = useRef<HTMLDivElement>(null),
+    followMessages = useRef(true);
+  useEffect(() => {
+    followMessages.current = true;
+  }, [selected]);
+  useEffect(() => {
+    if (messageLog.current && !archived && followMessages.current)
+      messageLog.current.scrollTop = messageLog.current.scrollHeight;
+  }, [messages.length, selected, page, archived]);
   session.current = { duty, selected, user };
   const current = conversations.find((c) => c.id === selected);
+  const displayedConversations = conversations
+    .filter(
+      (c) =>
+        c.kind !== "broadcast" ||
+        c.id === "all-staff" ||
+        c.mediaAllowed !== false ||
+        c.id === selected,
+    )
+    .sort(
+      (a, b) =>
+        ({ channel: 0, broadcast: 1, private: 2 })[
+          a.kind as "channel" | "broadcast" | "private"
+        ] -
+        { channel: 0, broadcast: 1, private: 2 }[
+          b.kind as "channel" | "broadcast" | "private"
+        ],
+    );
+  const channelTitle = (c: any) =>
+    c.kind === "private"
+      ? c.members
+          .filter((m: any) => m.id !== user?.id)
+          .map((m: any) => m.name)
+          .join(", ") || c.name
+      : c.name;
   const operations = useOperations(
     user,
     online &&
@@ -307,7 +338,13 @@ export default function App() {
     );
     setPeople(ps);
     if (!cs.some((c: any) => c.id === session.current.selected))
-      setSelected(cs[0]?.id || "");
+      setSelected(
+        cs.find((c: any) => c.kind === "channel" && c.mediaAllowed !== false)
+          ?.id ||
+          cs.find((c: any) => c.id === "all-staff")?.id ||
+          cs[0]?.id ||
+          "",
+      );
     if (session.current.user?.role === "admin")
       setOverview(await api("/admin/overview"));
   }, []);
@@ -344,11 +381,18 @@ export default function App() {
   useEffect(() => {
     coordinator.onState = setState;
     coordinator.onError = report;
-    coordinator.onAudience = setAudience;
     coordinator.onRecording = async (cid, id, blob) => {
       const owner = session.current.user?.id;
       if (!owner) return;
-      await outbox.put({ id, cid, owner, kind: "ptt-recording", blob, name: "ptt.webm", createdAt: Date.now() });
+      await outbox.put({
+        id,
+        cid,
+        owner,
+        kind: "ptt-recording",
+        blob,
+        name: "ptt.webm",
+        createdAt: Date.now(),
+      });
     };
     coordinator.onRooms = () => {
       setRooms(coordinator.connectedRooms);
@@ -523,15 +567,17 @@ export default function App() {
             attachmentId = f.id;
             await outbox.put({ ...p, attachmentId });
           }
-          if (p.kind === "ptt-recording") await api(`/messages/${p.id}/recording`, { attachmentId });
-          else await api(`/conversations/${p.cid}/messages`, {
-            id: p.id,
-            text: p.text,
-            kind: p.kind,
-            attachmentId,
-            createdAt: p.createdAt,
-            delayed: Date.now() - p.createdAt > 30000,
-          });
+          if (p.kind === "ptt-recording")
+            await api(`/messages/${p.id}/recording`, { attachmentId });
+          else
+            await api(`/conversations/${p.cid}/messages`, {
+              id: p.id,
+              text: p.text,
+              kind: p.kind,
+              attachmentId,
+              createdAt: p.createdAt,
+              delayed: Date.now() - p.createdAt > 30000,
+            });
           await outbox.remove(p.id);
         } catch (e) {
           report(e);
@@ -626,8 +672,22 @@ export default function App() {
   async function acknowledge(m: any) {
     try {
       await api(`/messages/${m.id}/receipt`, { state: "acknowledged" });
-      setMessages(old => old.map(row => row.id === m.id ? { ...row, receipts: [...row.receipts.filter((r: any) => r.user_id !== user.id), { user_id: user.id, state: "acknowledged", at: Date.now() }] } : row));
-    } catch (e) { report(e); }
+      setMessages((old) =>
+        old.map((row) =>
+          row.id === m.id
+            ? {
+                ...row,
+                receipts: [
+                  ...row.receipts.filter((r: any) => r.user_id !== user.id),
+                  { user_id: user.id, state: "acknowledged", at: Date.now() },
+                ],
+              }
+            : row,
+        ),
+      );
+    } catch (e) {
+      report(e);
+    }
   }
   async function privateChat(uid: string) {
     try {
@@ -658,29 +718,36 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <Mark />
-        <div className="top-status mono">
-          <span className={"dot " + (!online ? "hollow" : "")} />
-          {online ? "SERVER CONNECTED" : "SERVER UNREACHABLE"} //{" "}
+        <span className="workspace-label">
+          {user.role === "admin" ? "Admin workspace" : "Staff workspace"}
+        </span>
+        <button
+          className={"duty-control " + (duty ? "on-duty" : "")}
+          aria-pressed={duty}
+          onClick={() => setDuty(!duty)}
+          title={duty ? "End duty" : "Start duty"}
+        >
+          <span className={"dot " + (!duty ? "hollow" : "")} />
           {duty ? "ON DUTY" : "OFF DUTY"}
-          <LocationControl ops={operations} />
-        </div>
+        </button>
         <button
           className="avatar"
-          title="Settings"
+          title={user.name + " · Account settings"}
+          aria-label={user.name + " · Account settings"}
           onClick={() => setPage("settings")}
         >
-          {user.name.slice(0, 2).toUpperCase()}
+          {user.name
+            .trim()
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((part: string) => part[0])
+            .join("")
+            .toUpperCase()}
         </button>
       </header>
       <div className="shell">
         <aside>
-          <div className="eyebrow">PRIMARY DISPATCH</div>
-          <h2>
-            Communication
-            <br />
-            without the noise.
-          </h2>
-          <nav>
+          <nav aria-label="Main navigation">
             {user.role === "admin" && (
               <button
                 className={page === "map" ? "active" : ""}
@@ -704,51 +771,32 @@ export default function App() {
               <Radio />
               Communications
             </button>
-            <button
-              className={page === "people" ? "active" : ""}
-              onClick={() => setPage("people")}
-            >
-              <Users />
-              People
-            </button>
-            {user.role === "admin" && (
+            {user.role === "admin" ? (
+              <>
+                <span className="nav-section">Administration</span>
+                <button
+                  className={page === "admin" ? "active" : ""}
+                  onClick={() => setPage("admin")}
+                >
+                  <Users />
+                  Organisation
+                </button>
+              </>
+            ) : (
               <button
-                className={page === "admin" ? "active" : ""}
-                onClick={() => setPage("admin")}
+                className={page === "people" ? "active" : ""}
+                onClick={() => setPage("people")}
               >
-                <Activity />
-                Organisation
+                <Users />
+                People
               </button>
             )}
-            <button
-              className={page === "settings" ? "active" : ""}
-              onClick={() => setPage("settings")}
-            >
-              <Settings />
-              Settings
-            </button>
           </nav>
           <div className="side-footer">
-            <span className="eyebrow">OPERATOR</span>
-            <strong>{user.name}</strong>
-            <span className="mono">
-              {user.role.toUpperCase()} // {rooms.length} AUDIO ROOMS
-            </span>
-            <button
-              className={duty ? "outline" : "primary"}
-              onClick={() => setDuty(!duty)}
-            >
-              {duty ? <Square size={14} /> : <Radio size={16} />}{" "}
-              {duty ? "END DUTY" : "START DUTY"}
-            </button>
+            <span>{user.name}</span>
           </div>
         </aside>
         <main className="workspace">
-          <CommunicationPanel
-            ops={operations}
-            user={user}
-            onConversation={openCommunication}
-          />
           {(page === "map" || page === "threads") && (
             <Operations
               ops={operations}
@@ -783,50 +831,79 @@ export default function App() {
           {page === "comms" && (
             <>
               <div className="page-title">
-                <div>
-                  <span className="eyebrow">OPERATIONS / COMMUNICATIONS</span>
-                  <h1>Stay connected.</h1>
-                </div>
-                <span className="outline-badge">
-                  {conversations.length} CONVERSATIONS
-                </span>
+                <h1>Communications</h1>
+                {user.role === "admin" && (
+                  <button
+                    className="outline"
+                    aria-expanded={broadcastOpen}
+                    onClick={() => setBroadcastOpen(!broadcastOpen)}
+                  >
+                    <Radio size={16} />
+                    Broadcast
+                  </button>
+                )}
               </div>
+              {(user.role !== "admin" ||
+                broadcastOpen ||
+                operations.data?.exchange) && (
+                <CommunicationPanel
+                  ops={operations}
+                  user={user}
+                  onConversation={openCommunication}
+                  onPrepared={() => setBroadcastOpen(false)}
+                />
+              )}
+              {operations.error && (
+                <div className="notice error" role="alert">
+                  {operations.error}
+                  <button
+                    aria-label="Dismiss broadcast error"
+                    onClick={() => operations.setError("")}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               <div className="comms-grid">
                 <section className="conversation-list">
-                  <div className="section-title">
-                    YOUR CHANNELS{" "}
-                    <span>
-                      {conversations.length.toString().padStart(2, "0")}
-                    </span>
-                  </div>
-                  {conversations.map((c) => (
-                    <button
-                      key={c.id}
-                      className={
-                        "conversation " + (c.id === selected ? "selected" : "")
-                      }
-                      onClick={() => setSelected(c.id)}
-                    >
-                      <span className="channel-icon">
-                        {c.kind === "private" ? (
-                          <Lock size={18} />
-                        ) : (
-                          <Radio size={18} />
+                  <div className="section-title">Channels</div>
+                  {displayedConversations.map((c, index) => (
+                    <Fragment key={c.id}>
+                      {c.kind === "private" &&
+                        displayedConversations[index - 1]?.kind !==
+                          "private" && (
+                          <div className="section-title direct-heading">
+                            Direct
+                          </div>
                         )}
-                      </span>
-                      <span>
-                        <b>{c.name}</b>
-                        <small>
-                          {c.kind === "broadcast"
-                            ? "ADMIN BROADCAST"
-                            : c.kind === "private"
-                              ? "PRIVATE / TWO PEOPLE"
-                              : `${c.members.length} MEMBERS`}{" "}
-                          · {c.listeners} READY
-                        </small>
-                      </span>
-                      {c.speaker && <span className="dot" />}
-                    </button>
+                      <button
+                        key={c.id}
+                        className={
+                          "conversation " +
+                          (c.id === selected ? "selected" : "")
+                        }
+                        onClick={() => setSelected(c.id)}
+                      >
+                        <span className="channel-icon">
+                          {c.kind === "private" ? (
+                            <Lock size={18} />
+                          ) : (
+                            <Radio size={18} />
+                          )}
+                        </span>
+                        <span>
+                          <b>{channelTitle(c)}</b>
+                          <small>
+                            {c.kind === "broadcast"
+                              ? "Broadcast"
+                              : c.kind === "private"
+                                ? "Private conversation"
+                                : `${c.members.length} members`}{" "}
+                          </small>
+                        </span>
+                        {c.speaker && <span className="dot" />}
+                      </button>
+                    </Fragment>
                   ))}
                   {!conversations.length && (
                     <p className="empty">
@@ -835,40 +912,27 @@ export default function App() {
                   )}
                   <button
                     className="link-button"
-                    onClick={() => setPage("people")}
+                    onClick={() =>
+                      setPage(user.role === "admin" ? "admin" : "people")
+                    }
                   >
                     <Plus size={16} />
                     Open private conversation
                   </button>
-                  <div className="network-note">
-                    <b>LOCAL NETWORK FIRST</b>
-                    <p>
-                      Internet is optional when your organisation’s server and
-                      media service are reachable.
-                    </p>
-                  </div>
                 </section>
                 <section className="communication">
                   {current && (
                     <>
                       <div className="person-panel">
-                        <span className="initials">
-                          {current.kind === "private" ? (
-                            <Lock size={27} />
-                          ) : (
-                            <Radio size={27} />
-                          )}
-                        </span>
                         <div>
-                          <h2>{current.name}</h2>
-                          <span className="eyebrow">
+                          <h2>{channelTitle(current)}</h2>
+                          <span className="conversation-type">
                             {current.kind === "private"
-                              ? "DIRECT / PRIVATE COMMS"
+                              ? "Private conversation"
                               : current.kind === "broadcast"
-                                ? current.id === "all-staff"
-                                  ? "ORGANISATION / ALL STAFF"
-                                  : "BROADCAST / SELECTED AUDIENCE"
-                                : "TEAM / CHANNEL COMMS"}
+                                ? "Broadcast"
+                                : "Team channel"}{" "}
+                            · {current.members.length} members
                           </span>
                         </div>
                         <div className="call-actions">
@@ -904,189 +968,114 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      <div className="meta-row">
-                        <span>
-                          <Lock size={13} />{" "}
-                          {current.kind === "private"
-                            ? "PERMITTED PAIR"
-                            : "MEMBERS ONLY"}
-                        </span>
-                        <span>
-                          {rooms.includes(selected)
-                            ? "AUDIO CONNECTED"
-                            : "AUDIO DISCONNECTED"}
-                        </span>
-                      </div>
-                      <div className="tabs">
+                      <div className="voice-view">
+                        <div className="voice-status">
+                          <strong>
+                            {!online
+                              ? "Server unavailable"
+                              : rooms.includes(selected)
+                                ? "Voice connected"
+                                : duty
+                                  ? current.mediaAllowed === false
+                                    ? "Voice unavailable"
+                                    : "Connecting voice…"
+                                  : "Voice off"}
+                          </strong>
+                          <span>
+                            {state === "TRANSMITTING"
+                              ? "Transmitting · Release to finish"
+                              : state === "REQUESTING"
+                                ? "Requesting microphone…"
+                                : recording
+                                  ? "Recording voice note"
+                                  : call?.state === "accepted"
+                                    ? "In a private call"
+                                    : !duty
+                                      ? "Go on duty to use live voice"
+                                      : current.pttAllowed === false
+                                        ? "Listening only"
+                                        : "Hold to speak · Release to finish"}
+                          </span>
+                        </div>
                         <button
-                          className={tab === "voice" ? "active" : ""}
-                          onClick={() => setTab("voice")}
-                        >
-                          <Mic size={17} />
-                          LIVE VOICE (PTT)
-                        </button>
-                        <button
-                          className={tab === "chat" ? "active" : ""}
-                          onClick={() => setTab("chat")}
-                        >
-                          <MessageSquare size={17} />
-                          MESSAGE LOG
-                        </button>
-                      </div>
-                      {tab === "voice" && (
-                        <div className="voice-view">
-                          <div className="session-panel">
-                            {audience.length > 0 && (
-                              <p className="mono">
-                                At burst start:{" "}
-                                {
-                                  audience.filter(
-                                    (a) => a.state === "media-connected",
-                                  ).length
-                                }{" "}
-                                audio connected ·{" "}
-                                {
-                                  audience.filter((a) => a.state === "busy")
-                                    .length
-                                }{" "}
-                                busy ·{" "}
-                                {
-                                  audience.filter((a) =>
-                                    ["offline", "unavailable"].includes(
-                                      a.state,
-                                    ),
-                                  ).length
-                                }{" "}
-                                unavailable. This does not confirm anyone heard
-                                it.
-                              </p>
-                            )}
-                            <div className="section-title">
-                              <span>
-                                <span className="dot" />
-                                {current.kind === "private"
-                                  ? "PRIVATE"
-                                  : "CHANNEL"}{" "}
-                                VOICE SESSION
-                              </span>
-                              <span className="badge">
-                                {current.kind === "private"
-                                  ? "ISOLATED 1-ON-1"
-                                  : "ONE SPEAKER"}
-                              </span>
-                            </div>
-                            <div className="wave-panel">
-                              <div className="mono">
-                                {!online
-                                  ? "DISCONNECTED"
-                                  : state === "STANDBY" &&
-                                      incoming?.conversation === selected
-                                    ? "LISTENING"
-                                    : state}{" "}
-                                //{" "}
-                                {rooms.includes(selected)
-                                  ? "READY"
-                                  : "NOT READY"}
-                              </div>
-                              <div
-                                className={
-                                  "wave " +
-                                  (state === "TRANSMITTING" ? "moving" : "")
-                                }
-                              >
-                                {Array.from({ length: 32 }, (_, i) => (
-                                  <i
-                                    key={i}
-                                    style={{
-                                      height: 5 + ((i * 17) % 26),
-                                      animationDelay: `${i * 0.06}s`,
-                                    }}
-                                  />
-                                ))}
-                              </div>
-                              <p>
-                                {current.kind === "private"
-                                  ? "Live audio is restricted to the two members of this conversation."
-                                  : "Hold to request the channel. Speak only after TRANSMITTING appears."}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            className={
-                              "talk " +
-                              (state === "TRANSMITTING" ? "talking" : "")
-                            }
-                            disabled={
-                              !online ||
-                              current.pttAllowed === false ||
-                              !duty ||
-                              !rooms.includes(selected) ||
-                              recording ||
-                              call?.state === "accepted" ||
-                              (current.kind === "broadcast" &&
-                                user.role !== "admin")
-                            }
-                            onPointerDown={(e) => {
-                              e.currentTarget.setPointerCapture(e.pointerId);
+                          className={
+                            "talk " +
+                            (state === "TRANSMITTING" ? "talking" : "")
+                          }
+                          disabled={
+                            !online ||
+                            current.pttAllowed === false ||
+                            !duty ||
+                            !rooms.includes(selected) ||
+                            recording ||
+                            call?.state === "accepted" ||
+                            (current.kind === "broadcast" &&
+                              user.role !== "admin")
+                          }
+                          onPointerDown={(e) => {
+                            e.currentTarget.setPointerCapture(e.pointerId);
+                            void coordinator.start(selected);
+                          }}
+                          onPointerUp={() => void coordinator.stop()}
+                          onPointerCancel={() => void coordinator.stop()}
+                          onKeyDown={(e) => {
+                            if (
+                              (e.key === " " || e.key === "Enter") &&
+                              !e.repeat
+                            ) {
+                              e.preventDefault();
                               void coordinator.start(selected);
-                            }}
-                            onPointerUp={() => void coordinator.stop()}
-                            onPointerCancel={() => void coordinator.stop()}
-                            onKeyDown={(e) => {
-                              if (
-                                (e.key === " " || e.key === "Enter") &&
-                                !e.repeat
-                              ) {
-                                e.preventDefault();
-                                void coordinator.start(selected);
-                              }
-                            }}
-                            onKeyUp={(e) => {
-                              if (e.key === " " || e.key === "Enter") {
-                                e.preventDefault();
-                                void coordinator.stop();
-                              }
-                            }}
-                          >
-                            <Mic size={46} />
-                            <strong>
-                              {state === "TRANSMITTING" ? "LIVE" : "TALK"}
-                            </strong>
-                            <span>
-                              {state === "REQUESTING"
-                                ? "REQUESTING SLOT"
-                                : "HOLD TO TRANSMIT"}
-                            </span>
-                          </button>
-                          <div className="voice-caption">
-                            <Lock size={15} /> 30-SECOND LIMIT · RELEASE TO
-                            FINISH
-                          </div>
-                          {!duty && (
-                            <button
-                              className="primary wide"
-                              onClick={() => setDuty(true)}
-                            >
-                              START ON-DUTY SESSION <ArrowRight size={17} />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      <div className="message-log">
+                            }
+                          }}
+                          onKeyUp={(e) => {
+                            if (e.key === " " || e.key === "Enter") {
+                              e.preventDefault();
+                              void coordinator.stop();
+                            }
+                          }}
+                        >
+                          <Mic size={18} />
+                          <strong>
+                            {state === "TRANSMITTING"
+                              ? "Transmitting"
+                              : "Hold to talk"}
+                          </strong>
+                        </button>
+                      </div>
+                      <div
+                        className="message-log"
+                        ref={messageLog}
+                        onScroll={(e) => {
+                          const log = e.currentTarget;
+                          followMessages.current =
+                            log.scrollHeight -
+                              log.scrollTop -
+                              log.clientHeight <
+                            120;
+                        }}
+                      >
                         <div className="log-folders">
-                          <button className={!archived ? "primary" : ""} onClick={() => setArchived(false)}>Log</button>
-                          <button className={archived ? "primary" : ""} onClick={() => setArchived(true)}>Archived ({messages.filter(isArchived).length})</button>
-                        </div>
-                        <div className="section-title">
-                          {current.kind === "private" ? "DIRECT" : "CHANNEL"}{" "}
-                          {archived ? "ARCHIVED" : "COMM LOG"} <span>{archived ? "ONLY FOR YOU" : "SERVER HISTORY"}</span>
+                          <button
+                            className={!archived ? "primary" : ""}
+                            onClick={() => setArchived(false)}
+                          >
+                            Messages
+                          </button>
+                          <button
+                            className={archived ? "primary" : ""}
+                            onClick={() => setArchived(true)}
+                          >
+                            Archived ({messages.filter(isArchived).length})
+                          </button>
                         </div>
                         {!visibleMessages.length && (
                           <p className="empty">
-                            {archived ? "Acknowledged messages appear here." : "No unacknowledged messages."}
+                            {archived
+                              ? "Acknowledged messages appear here."
+                              : "No new messages."}
                           </p>
                         )}
-                        {visibleMessages.slice(tab === "voice" && !archived ? -4 : 0).map((m) => (
+                        {visibleMessages.map((m) => (
                           <article
                             className={
                               "message " +
@@ -1119,9 +1108,36 @@ export default function App() {
                             {m.attachment_id && <Attachment message={m} />}
                             {["ptt", "voice"].includes(m.kind) && (
                               <div className="transcript">
-                                <span className="mono">TRANSCRIPT / AUTOMATIC</span>
-                                <p>{m.transcript?.text || (m.status === "live" ? "Transcript appears after the live burst." : ["pending", "processing"].includes(m.transcript?.state) ? "Transcribing…" : m.transcript?.error || "Transcript unavailable. Listen to the audio.")}</p>
-                                {online && m.attachment_id && (!m.transcript || ["failed", "unavailable"].includes(m.transcript.state)) && <button onClick={() => void action(`/messages/${m.id}/transcript/retry`)}>Retry transcript</button>}
+                                <span className="mono">
+                                  TRANSCRIPT / AUTOMATIC
+                                </span>
+                                <p>
+                                  {m.transcript?.text ||
+                                    (m.status === "live"
+                                      ? "Transcript appears after the live burst."
+                                      : ["pending", "processing"].includes(
+                                            m.transcript?.state,
+                                          )
+                                        ? "Transcribing…"
+                                        : m.transcript?.error ||
+                                          "Transcript unavailable. Listen to the audio.")}
+                                </p>
+                                {online &&
+                                  m.attachment_id &&
+                                  (!m.transcript ||
+                                    ["failed", "unavailable"].includes(
+                                      m.transcript.state,
+                                    )) && (
+                                    <button
+                                      onClick={() =>
+                                        void action(
+                                          `/messages/${m.id}/transcript/retry`,
+                                        )
+                                      }
+                                    >
+                                      Retry transcript
+                                    </button>
+                                  )}
                               </div>
                             )}
                             <div className="message-status">
@@ -1148,7 +1164,12 @@ export default function App() {
                           </article>
                         ))}
                         {pending
-                          .filter((p) => p.cid === selected && !archived && p.kind !== "ptt-recording")
+                          .filter(
+                            (p) =>
+                              p.cid === selected &&
+                              !archived &&
+                              p.kind !== "ptt-recording",
+                          )
                           .map((p) => (
                             <article className="message queued" key={p.id}>
                               <p>{p.text || p.name}</p>
@@ -1158,75 +1179,81 @@ export default function App() {
                             </article>
                           ))}
                       </div>
-                      {!archived && !(
-                        current.kind === "broadcast" && user.role !== "admin"
-                      ) && (
-                        <form
-                          className="composer"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void send();
-                          }}
-                        >
-                          <input
-                            ref={fileInput}
-                            type="file"
-                            hidden
-                            accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,audio/*"
-                            onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f)
-                                void send(
-                                  f,
-                                  f.name,
-                                  f.type.startsWith("image/")
-                                    ? "image"
-                                    : f.type.startsWith("video/")
-                                      ? "video"
-                                      : "voice",
-                                );
-                              e.target.value = "";
+                      {!archived &&
+                        !(
+                          current.kind === "broadcast" && user.role !== "admin"
+                        ) && (
+                          <form
+                            className="composer"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void send();
                             }}
-                          />
-                          <button
-                            type="button"
-                            aria-label="Attach photo or video"
-                            onClick={() => fileInput.current?.click()}
-                            disabled={recording}
                           >
-                            <Paperclip size={19} />
-                          </button>
-                          <input
-                            aria-label="Message"
-                            value={text}
-                            onChange={(e) => setText(e.target.value)}
-                            placeholder="Write to your team…"
-                            maxLength={4000}
-                          />
-                          <button
-                            type="button"
-                            aria-label={
-                              recording
-                                ? "Stop voice note"
-                                : "Record voice note"
-                            }
-                            className={recording ? "recording" : ""}
-                            onClick={() => void voiceNote()}
-                          >
-                            {recording ? (
-                              <Square size={17} />
-                            ) : (
-                              <Mic size={19} />
+                            <input
+                              ref={fileInput}
+                              type="file"
+                              hidden
+                              accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,audio/*"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f)
+                                  void send(
+                                    f,
+                                    f.name,
+                                    f.type.startsWith("image/")
+                                      ? "image"
+                                      : f.type.startsWith("video/")
+                                        ? "video"
+                                        : "voice",
+                                  );
+                                e.target.value = "";
+                              }}
+                            />
+                            <button
+                              type="button"
+                              aria-label="Attach photo or video"
+                              onClick={() => fileInput.current?.click()}
+                              disabled={recording}
+                            >
+                              <Paperclip size={19} />
+                            </button>
+                            <input
+                              aria-label="Message"
+                              value={text}
+                              onChange={(e) => setText(e.target.value)}
+                              placeholder={
+                                "Message " + channelTitle(current) + "…"
+                              }
+                              maxLength={4000}
+                            />
+                            <button
+                              type="button"
+                              aria-label={
+                                recording
+                                  ? "Stop voice note"
+                                  : "Record voice note"
+                              }
+                              className={recording ? "recording" : ""}
+                              onClick={() => void voiceNote()}
+                            >
+                              {recording ? (
+                                <Square size={17} />
+                              ) : (
+                                <Mic size={19} />
+                              )}
+                            </button>
+                            <button
+                              className="primary"
+                              aria-label="Send message"
+                            >
+                              <Send size={17} />
+                            </button>
+                            {progress !== undefined && (
+                              <progress value={progress} max={100} />
                             )}
-                          </button>
-                          <button className="primary" aria-label="Send message">
-                            <Send size={17} />
-                          </button>
-                          {progress !== undefined && (
-                            <progress value={progress} max={100} />
-                          )}
-                        </form>
-                      )}
+                          </form>
+                        )}
                     </>
                   )}
                 </section>
@@ -1267,194 +1294,22 @@ export default function App() {
               )}
             </>
           )}
-          {page === "admin" && overview && (
-            <>
-              <div className="page-title">
-                <div>
-                  <span className="eyebrow">ORGANISATION / CONTROL ROOM</span>
-                  <h1>Dispatch overview.</h1>
-                </div>
-                <button className="outline" onClick={() => void refresh()}>
-                  <RefreshCw size={15} />
-                  Refresh
-                </button>
-              </div>
-              <div className="stats">
-                {[
-                  [
-                    "APPROVED MEMBERS",
-                    overview.users.filter((u: any) => u.approved).length,
-                  ],
-                  [
-                    "CONNECTED DEVICES",
-                    overview.users
-                      .flatMap((u: any) => u.devices)
-                      .filter((d: any) => d.online).length,
-                  ],
-                  [
-                    "ON DUTY",
-                    overview.users
-                      .flatMap((u: any) => u.devices)
-                      .filter((d: any) => d.online && d.onDuty).length,
-                  ],
-                  [
-                    "ACTIVE SPEAKERS",
-                    overview.channels.filter((c: any) => c.speaker).length,
-                  ],
-                ].map(([label, value]) => (
-                  <div key={label}>
-                    <span className="eyebrow">{label}</span>
-                    <strong>{value}</strong>
-                  </div>
-                ))}
-              </div>
-              <div className="broadcast-card">
-                <Radio />
-                <div>
-                  <h3>ALL STAFF BROADCAST</h3>
-                  <p>Text and live voice for every approved member.</p>
-                </div>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setSelected("all-staff");
-                    setPage("comms");
-                  }}
-                >
-                  OPEN CHANNEL <ArrowRight size={16} />
-                </button>
-              </div>
-              <section className="admin-panel">
-                <div className="section-title">MEMBER & DEVICE APPROVAL</div>
-                {overview.users.map((u: any) => (
-                  <div className="member-row" key={u.id}>
-                    <div>
-                      <strong>{u.name}</strong>
-                      <small>
-                        {u.email} · {u.role}
-                      </small>
-                    </div>
-                    <span className={u.approved ? "light-badge" : "badge"}>
-                      {u.approved ? "APPROVED" : "PENDING"}
-                    </span>
-                    {u.id !== user.id && (
-                      <button
-                        className="outline"
-                        onClick={() =>
-                          void action(`/admin/users/${u.id}/approval`, {
-                            approved: !u.approved,
-                          })
-                        }
-                      >
-                        {u.approved ? "Revoke" : "Approve member"}
-                      </button>
-                    )}
-                    <div className="devices">
-                      {u.devices.map((d: any) => (
-                        <div key={d.id}>
-                          <span
-                            className={"dot " + (!d.online ? "hollow" : "")}
-                          />
-                          <span>
-                            {d.name}{" "}
-                            <small>
-                              {d.online ? "ONLINE" : "OFFLINE"} ·{" "}
-                              {d.onDuty ? "ON DUTY" : "OFF DUTY"} ·{" "}
-                              {d.rooms.length} AUDIO ROOMS{" "}
-                              {d.busy ? "· IN CALL" : ""}
-                              {!d.online && d.lastSeen
-                                ? ` · LAST SEEN ${new Date(d.lastSeen).toLocaleString()}`
-                                : ""}
-                            </small>
-                          </span>
-                          {d.id !== user.device && (
-                            <button
-                              onClick={() =>
-                                void action(`/admin/devices/${d.id}/approval`, {
-                                  approved: !d.approved,
-                                })
-                              }
-                            >
-                              {d.approved ? "Revoke device" : "Approve device"}
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </section>
-              <section className="admin-panel">
-                <div className="section-title">CHANNELS & MEMBERSHIPS</div>
-                <form
-                  className="inline-form"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void action("/admin/channels", { name: newName });
-                    setNewName("");
-                  }}
-                >
-                  <input
-                    required
-                    minLength={2}
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="New channel name"
-                  />
-                  <button className="primary">
-                    <Plus size={15} />
-                    CREATE CHANNEL
-                  </button>
-                </form>
-                {overview.channels.map((c: any) => (
-                  <div className="channel-admin" key={c.id}>
-                    <div>
-                      <h3>{c.name}</h3>
-                      <span className="mono">
-                        {c.listeners} MEDIA CONNECTED ·{" "}
-                        {c.speaker ? "SPEAKER ACTIVE" : "STANDBY"}
-                      </span>
-                    </div>
-                    {c.kind === "channel" && (
-                      <div className="member-checks">
-                        {overview.users
-                          .filter((u: any) => u.approved)
-                          .map((u: any) => (
-                            <label key={u.id}>
-                              <input
-                                type="checkbox"
-                                checked={c.memberIds.includes(u.id)}
-                                onChange={(e) =>
-                                  void action(
-                                    `/admin/channels/${c.id}/members`,
-                                    {
-                                      memberIds: e.target.checked
-                                        ? [...c.memberIds, u.id]
-                                        : c.memberIds.filter(
-                                            (id: string) => id !== u.id,
-                                          ),
-                                    },
-                                    "PUT",
-                                  )
-                                }
-                              />
-                              {u.name}
-                            </label>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </section>
-              <TeamPanel overview={overview} action={action} />
-            </>
+          {page === "admin" && (
+            <Organisation
+              overview={overview}
+              user={user}
+              ops={operations}
+              refresh={refresh}
+              onConversation={openCommunication}
+              onPrivate={(id) => void privateChat(id)}
+              report={report}
+            />
           )}
           {page === "settings" && (
             <>
               <div className="page-title">
                 <div>
-                  <span className="eyebrow">OPERATOR / SETTINGS</span>
-                  <h1>Your session.</h1>
+                  <h1>Account settings</h1>
                 </div>
               </div>
               <section className="admin-panel settings">
@@ -1465,32 +1320,23 @@ export default function App() {
                 <label>
                   <input
                     type="checkbox"
-                    checked={duty}
-                    onChange={(e) => setDuty(e.target.checked)}
-                  />
-                  On duty — connect permitted live-audio channels
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
                     checked={conserve}
                     onChange={(e) => setConserve(e.target.checked)}
                   />
                   Conserve data — disable video calls and video uploads
                 </label>
-                <p>
-                  Live reception in a locked phone is supported through the
-                  Android foreground session. A browser tab may be suspended by
-                  your operating system.
-                </p>
-                <div className="connection-panel">
-                  <b>SERVER</b>
-                  <span>{online ? "CONNECTED" : "UNREACHABLE"}</span>
-                  <b>AUDIO ROOMS</b>
-                  <span>{rooms.length} CONNECTED</span>
-                  <b>OUTBOX</b>
-                  <span>{pending.length} QUEUED</span>
-                </div>
+                <LocationControl ops={operations} />
+                <details className="account-details">
+                  <summary>Connection details</summary>
+                  <div className="connection-panel">
+                    <b>Server</b>
+                    <span>{online ? "Connected" : "Unavailable"}</span>
+                    <b>Live voice channels</b>
+                    <span>{rooms.length} connected</span>
+                    <b>Outbox</b>
+                    <span>{pending.length} queued</span>
+                  </div>
+                </details>
                 <button className="outline" onClick={() => void flush()}>
                   <RefreshCw size={15} />
                   Retry queued messages
@@ -1546,114 +1392,6 @@ export default function App() {
           )}
         </main>
       </div>
-      <nav className="bottom-nav">
-        <button
-          className={page === "threads" ? "active" : ""}
-          onClick={() => setPage("threads")}
-        >
-          <MessageSquare />
-          <span>THREADS</span>
-        </button>
-        {user.role === "admin" && (
-          <button
-            className={page === "map" ? "active" : ""}
-            onClick={() => setPage("map")}
-          >
-            <Activity />
-            <span>MAP</span>
-          </button>
-        )}
-        <button
-          className={page === "comms" ? "active" : ""}
-          onClick={() => setPage("comms")}
-        >
-          <Radio />
-          <span>PTT COMMS</span>
-        </button>
-        <button
-          className={page === "people" ? "active" : ""}
-          onClick={() => setPage("people")}
-        >
-          <Users />
-          <span>PEOPLE</span>
-        </button>
-        {user.role === "admin" && (
-          <button
-            className={page === "admin" ? "active" : ""}
-            onClick={() => setPage("admin")}
-          >
-            <Activity />
-            <span>DISPATCH</span>
-          </button>
-        )}
-        <button
-          className={page === "settings" ? "active" : ""}
-          onClick={() => setPage("settings")}
-        >
-          <Settings />
-          <span>SESSION</span>
-        </button>
-      </nav>
     </div>
-  );
-}
-function TeamPanel({
-  overview,
-  action,
-}: {
-  overview: any;
-  action: (p: string, b?: any, m?: string) => Promise<void>;
-}) {
-  const [name, setName] = useState("");
-  return (
-    <section className="admin-panel">
-      <div className="section-title">TEAMS</div>
-      <form
-        className="inline-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void action("/admin/teams", { name });
-          setName("");
-        }}
-      >
-        <input
-          required
-          minLength={2}
-          placeholder="New team name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button className="primary">CREATE TEAM</button>
-      </form>
-      {overview.teams.map((t: any) => (
-        <div className="channel-admin" key={t.id}>
-          <h3>{t.name}</h3>
-          <div className="member-checks">
-            {overview.users
-              .filter((u: any) => u.approved)
-              .map((u: any) => (
-                <label key={u.id}>
-                  <input
-                    type="checkbox"
-                    checked={t.memberIds.includes(u.id)}
-                    onChange={(e) =>
-                      void action(
-                        `/admin/teams/${t.id}/members`,
-                        {
-                          memberIds: e.target.checked
-                            ? [...t.memberIds, u.id]
-                            : t.memberIds.filter((id: string) => id !== u.id),
-                        },
-                        "PUT",
-                      )
-                    }
-                  />
-                  {u.name}
-                </label>
-              ))}
-          </div>
-        </div>
-      ))}
-    </section>
   );
 }

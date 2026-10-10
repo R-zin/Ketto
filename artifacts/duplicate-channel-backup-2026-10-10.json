@@ -1,0 +1,107 @@
+[
+  {
+    "conversation": {
+      "id": "5fec7b32-1409-4805-8132-c1070eb6d9bd",
+      "name": "Admin broadcast · Everyone",
+      "kind": "broadcast",
+      "pair": null
+    },
+    "session": {
+      "conversation_id": "5fec7b32-1409-4805-8132-c1070eb6d9bd",
+      "creator_id": "d720d25b-39b4-4ce5-8d67-1026def266e4",
+      "team_ids": "[]",
+      "state": "ended",
+      "expires_at": 1791585074066
+    },
+    "members": [
+      {
+        "conversation_id": "5fec7b32-1409-4805-8132-c1070eb6d9bd",
+        "user_id": "1f2c8efd-241b-4653-8fbe-26c5d68c73db"
+      },
+      {
+        "conversation_id": "5fec7b32-1409-4805-8132-c1070eb6d9bd",
+        "user_id": "34110557-07dc-4132-80dd-25c2ba8dcb85"
+      },
+      {
+        "conversation_id": "5fec7b32-1409-4805-8132-c1070eb6d9bd",
+        "user_id": "d720d25b-39b4-4ce5-8d67-1026def266e4"
+      }
+    ],
+    "settings": [
+      {
+        "key": "media-epoch:5fec7b32-1409-4805-8132-c1070eb6d9bd",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "conversation": {
+      "id": "73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+      "name": "Admin broadcast · Everyone",
+      "kind": "broadcast",
+      "pair": null
+    },
+    "session": {
+      "conversation_id": "73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+      "creator_id": "d720d25b-39b4-4ce5-8d67-1026def266e4",
+      "team_ids": "[]",
+      "state": "ended",
+      "expires_at": 1791585071341
+    },
+    "members": [
+      {
+        "conversation_id": "73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+        "user_id": "1f2c8efd-241b-4653-8fbe-26c5d68c73db"
+      },
+      {
+        "conversation_id": "73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+        "user_id": "34110557-07dc-4132-80dd-25c2ba8dcb85"
+      },
+      {
+        "conversation_id": "73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+        "user_id": "d720d25b-39b4-4ce5-8d67-1026def266e4"
+      }
+    ],
+    "settings": [
+      {
+        "key": "media-epoch:73ee5a8f-5c36-454a-ab7e-7636f9c8ac32",
+        "value": "2"
+      }
+    ]
+  },
+  {
+    "conversation": {
+      "id": "a5706d29-ec42-4099-be7b-4b2d28221afa",
+      "name": "Admin broadcast · Everyone",
+      "kind": "broadcast",
+      "pair": null
+    },
+    "session": {
+      "conversation_id": "a5706d29-ec42-4099-be7b-4b2d28221afa",
+      "creator_id": "d720d25b-39b4-4ce5-8d67-1026def266e4",
+      "team_ids": "[]",
+      "state": "ended",
+      "expires_at": 1791585062329
+    },
+    "members": [
+      {
+        "conversation_id": "a5706d29-ec42-4099-be7b-4b2d28221afa",
+        "user_id": "1f2c8efd-241b-4653-8fbe-26c5d68c73db"
+      },
+      {
+        "conversation_id": "a5706d29-ec42-4099-be7b-4b2d28221afa",
+        "user_id": "34110557-07dc-4132-80dd-25c2ba8dcb85"
+      },
+      {
+        "conversation_id": "a5706d29-ec42-4099-be7b-4b2d28221afa",
+        "user_id": "d720d25b-39b4-4ce5-8d67-1026def266e4"
+      }
+    ],
+    "settings": [
+      {
+        "key": "media-epoch:a5706d29-ec42-4099-be7b-4b2d28221afa",
+        "value": "2"
+      }
+    ]
+  }
+]

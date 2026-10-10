@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title description">
+  <title id="title">Demo event venue floor plan</title>
+  <desc id="description">A schematic venue with stage, audience seating, registration, entrance, food court, first aid and connecting circulation paths.</desc>
+  <defs><pattern id="seats" width="42" height="38" patternUnits="userSpaceOnUse"><rect x="8" y="7" width="25" height="21" rx="4" fill="#d2dbd2"/></pattern></defs>
+  <rect width="1200" height="800" fill="#f4f6f1"/>
+  <text x="54" y="55" font-family="Arial,sans-serif" font-size="24" font-weight="700" fill="#293d30">DEMO EVENT VENUE</text>
+  <text x="1145" y="55" text-anchor="end" font-family="Arial,sans-serif" font-size="17" fill="#68766a">GROUND FLOOR · ILLUSTRATION</text>
+  <rect x="48" y="86" width="1104" height="620" rx="8" fill="#fff" stroke="#4e6454" stroke-width="5"/>
+  <rect x="338" y="116" width="530" height="134" rx="5" fill="#dce7dd" stroke="#718575" stroke-width="2"/>
+  <rect x="387" y="153" width="435" height="74" rx="4" fill="#9cb39f"/>
+  <text x="603" y="140" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#536658">STAGE</text>
+  <rect x="339" y="280" width="530" height="302" rx="5" fill="#eff3ec" stroke="#9ca99d" stroke-width="2"/>
+  <rect x="362" y="297" width="210" height="248" fill="url(#seats)"/>
+  <rect x="637" y="297" width="210" height="248" fill="url(#seats)"/>
+  <text x="604" y="566" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#6a786c">AUDIENCE SEATING</text>
+  <rect x="78" y="117" width="207" height="218" rx="5" fill="#e8eee7" stroke="#9ca99d" stroke-width="2"/>
+  <rect x="105" y="168" width="153" height="24" rx="3" fill="#bacabb"/>
+  <rect x="105" y="206" width="153" height="24" rx="3" fill="#bacabb"/>
+  <rect x="105" y="244" width="153" height="24" rx="3" fill="#bacabb"/>
+  <text x="181" y="316" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" fill="#68766a">REGISTRATION DESKS</text>
+  <rect x="78" y="371" width="207" height="211" rx="5" fill="#edf0e7" stroke="#9ca99d" stroke-width="2"/>
+  <circle cx="138" cy="438" r="24" fill="#c4cfb8"/><circle cx="223" cy="438" r="24" fill="#c4cfb8"/><circle cx="180" cy="514" r="24" fill="#c4cfb8"/>
+  <text x="181" y="566" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" fill="#68766a">FOOD &amp; SEATING</text>
+  <rect x="924" y="117" width="196" height="218" rx="5" fill="#e8eee7" stroke="#9ca99d" stroke-width="2"/>
+  <rect x="1006" y="151" width="31" height="88" fill="#9eafa2"/><rect x="977" y="179" width="88" height="31" fill="#9eafa2"/>
+  <text x="1022" y="316" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" fill="#68766a">FIRST AID</text>
+  <rect x="924" y="371" width="196" height="211" rx="5" fill="#eef1eb" stroke="#9ca99d" stroke-width="2"/>
+  <text x="1022" y="471" text-anchor="middle" font-family="Arial,sans-serif" font-size="17" fill="#8b978d">BACKSTAGE</text>
+  <path d="M310 120V609H892V120M603 582V704" fill="none" stroke="#b9c5b9" stroke-width="3" stroke-dasharray="10 8"/>
+  <rect x="500" y="624" width="205" height="77" rx="4" fill="#dde8dc"/>
+  <text x="603" y="684" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" fill="#526857">MAIN ENTRANCE</text>
+  <path d="M564 706H642" stroke="#f4f6f1" stroke-width="9"/>
+  <path d="M78 706H150M1040 706H1120" stroke="#f4f6f1" stroke-width="9"/>
+  <text x="114" y="743" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#68766a">EXIT</text>
+  <text x="1080" y="743" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" fill="#68766a">EXIT</text>
+  <text x="603" y="775" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" fill="#68766a">Schematic only · Replace with your venue's actual floor plan</text>
+</svg>

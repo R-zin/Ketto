@@ -1229,3 +1229,32 @@ aside nav button.active {
 .transcript .mono { font-size: 9px; color: #666; }
 .transcript p { margin: 8px 0 0; }
 .transcript button { margin-top: 8px; font-size: 11px; }
+
+/* Frame the existing square brand asset around its wordmark. */
+.brand {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: 140px;
+  height: 64px;
+  overflow: hidden;
+}
+.brand > img {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  max-width: none;
+  left: -76px;
+  top: -99px;
+}
+.topbar .top-status {
+  display: flex;
+  align-items: center;
+}
+.communication-dock > .broadcast-selector {
+  border-top: 0;
+  padding-top: 0;
+}
+.communication-dock > .dock-actions:empty {
+  display: none;
+}

@@ -28,10 +28,17 @@ const bad = (code: number, message: string): never => {
 
 export function registerPhase2(c: Context) {
   const { app, db, auth, admin, serial } = c;
-  const team = (uid: string) =>
-    db.get(
-      "SELECT t.*,o.channel_id,o.media_epoch FROM operational_assignments a JOIN teams t ON t.id=a.team_id JOIN operational_teams o ON o.team_id=t.id WHERE a.user_id=?",
+  const assignedTeams = (uid: string) =>
+    db.all(
+      "SELECT t.*,o.channel_id,o.media_epoch FROM operational_assignments a JOIN teams t ON t.id=a.team_id JOIN operational_teams o ON o.team_id=t.id WHERE a.user_id=? ORDER BY a.rowid",
       uid,
+    );
+  const team = (uid: string) => assignedTeams(uid)[0];
+  const belongs = (uid: string, tid: string) =>
+    !!db.get(
+      "SELECT 1 FROM operational_assignments WHERE user_id=? AND team_id=?",
+      uid,
+      tid,
     );
   const duty = () =>
     JSON.parse(
@@ -47,7 +54,7 @@ export function registerPhase2(c: Context) {
     !!issue &&
     (a.role === "admin" ||
       issue.audience === "everyone" ||
-      team(a.id)?.id === issue.team_id);
+      belongs(a.id, issue.team_id));
   const issue = (a: Auth, iid: string) => {
     const x = db.get("SELECT * FROM issues WHERE id=?", iid);
     if (!visible(a, x)) bad(404, "Thread unavailable");
@@ -109,7 +116,7 @@ export function registerPhase2(c: Context) {
       return (
         a.role === "admin" ||
         (op
-          ? team(a.id)?.id === op.team_id
+          ? belongs(a.id, op.team_id)
           : !db.get("SELECT 1 FROM operational_teams LIMIT 1"))
       );
     }
@@ -119,11 +126,10 @@ export function registerPhase2(c: Context) {
       a.id,
     );
     if (!other) return false;
-    const mine = team(a.id),
-      theirs = team(other.id),
+    const shared = assignedTeams(a.id).some((t) => belongs(other.id, t.id)),
       d = duty();
     return (
-      !!(mine && theirs && mine.id === theirs.id) ||
+      shared ||
       !!(
         d &&
         ((d.userId === a.id && d.deviceId === a.device) ||
@@ -135,7 +141,7 @@ export function registerPhase2(c: Context) {
     if (!pttAllowed(a, conv))
       bad(
         403,
-        "Live PTT is limited to your operational team or duty admin. Chat and calls remain available.",
+        "Live PTT is limited to your assigned channels or duty admin. Chat and calls remain available.",
       );
     const e = exchange();
     if (
@@ -242,6 +248,7 @@ export function registerPhase2(c: Context) {
               return {
                 ...u,
                 team: team(u.id),
+                channelMemberships: assignedTeams(u.id),
                 connected: devices.length > 0,
                 onDuty: devices.some((p) => p.onDuty),
                 checkin:
@@ -264,6 +271,7 @@ export function registerPhase2(c: Context) {
     return {
       serverAt: now,
       team: team(a.id) || null,
+      channelMemberships: assignedTeams(a.id),
       teams: db.all(
         "SELECT t.*,o.channel_id FROM teams t JOIN operational_teams o ON o.team_id=t.id",
       ),
@@ -360,7 +368,13 @@ export function registerPhase2(c: Context) {
     serial(async () => {
       const a = admin(req),
         uid = key.parse((req.params as any).uid),
-        b = z.object({ teamId: key.nullable() }).parse(req.body);
+        b = z
+          .union([
+            z.object({ teamId: key, assigned: z.boolean() }).strict(),
+            z.object({ teamIds: z.array(key).max(100) }).strict(),
+            z.object({ teamId: key.nullable() }).strict(),
+          ])
+          .parse(req.body);
       if (
         !db.get(
           "SELECT 1 FROM users WHERE id=? AND approved=1 AND role='staff'",
@@ -368,21 +382,35 @@ export function registerPhase2(c: Context) {
         )
       )
         bad(400, "Choose an approved volunteer");
-      if (
-        b.teamId &&
-        !db.get("SELECT 1 FROM operational_teams WHERE team_id=?", b.teamId)
-      )
-        bad(400, "Team unavailable");
-      const old = team(uid),
-        affected = [
-          old?.channel_id,
-          b.teamId
-            ? db.get(
-                "SELECT channel_id FROM operational_teams WHERE team_id=?",
-                b.teamId,
-              ).channel_id
-            : null,
-        ].filter(Boolean);
+      const oldTeams = assignedTeams(uid);
+      const oldIds = oldTeams.map((t) => t.id);
+      const nextIds = [
+        ...new Set(
+          "assigned" in b
+            ? b.assigned
+              ? [...oldIds, b.teamId]
+              : oldIds.filter((tid) => tid !== b.teamId)
+            : "teamIds" in b
+              ? b.teamIds
+              : b.teamId
+                ? [b.teamId]
+                : [],
+        ),
+      ];
+      for (const tid of nextIds)
+        if (!db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
+          bad(400, "Channel unavailable");
+      const removed = oldTeams.filter((t) => !nextIds.includes(t.id));
+      const added = nextIds
+        .filter((tid) => !oldIds.includes(tid))
+        .map((tid) =>
+          db.get(
+            "SELECT t.id,o.channel_id FROM teams t JOIN operational_teams o ON o.team_id=t.id WHERE t.id=?",
+            tid,
+          ),
+        );
+      const affected = [...removed, ...added].map((t) => t.channel_id);
+      if (!affected.length) return { ok: true };
       for (const b of db.all(
         "SELECT b.* FROM broadcast_sessions b JOIN members m ON m.conversation_id=b.conversation_id WHERE m.user_id=?",
         uid,
@@ -412,22 +440,23 @@ export function registerPhase2(c: Context) {
         .map((x) => x.id);
       for (const cid of privateIds) await c.closeChannel(cid);
       db.transaction(() => {
-        if (old)
+        for (const t of removed) {
           db.run(
             "DELETE FROM members WHERE conversation_id=? AND user_id=?",
-            old.channel_id,
+            t.channel_id,
             uid,
           );
-        db.run("DELETE FROM operational_assignments WHERE user_id=?", uid);
-        if (b.teamId) {
           db.run(
-            "INSERT INTO operational_assignments VALUES(?,?)",
+            "DELETE FROM operational_assignments WHERE user_id=? AND team_id=?",
             uid,
-            b.teamId,
+            t.id,
           );
+        }
+        for (const t of added) {
+          db.run("INSERT INTO operational_assignments VALUES(?,?)", uid, t.id);
           db.run(
             "INSERT OR IGNORE INTO members VALUES(?,?)",
-            affected.at(-1),
+            t.channel_id,
             uid,
           );
         }
@@ -578,27 +607,65 @@ export function registerPhase2(c: Context) {
             .all("SELECT user_id,team_id FROM operational_assignments")
             .filter((u) => b.teamIds.includes(u.team_id))
             .map((u) => u.user_id);
-      const cid = id();
+      // Audience order and repeated team IDs must not create new channels.
+      const teamIds = b.everyone ? [] : [...new Set(b.teamIds)].sort();
+      const audienceKey = JSON.stringify(teamIds);
+      const existing = db
+        .all(
+          "SELECT * FROM broadcast_sessions WHERE creator_id=? ORDER BY expires_at DESC",
+          a.id,
+        )
+        .find(
+          (session) =>
+            JSON.stringify(
+              [...new Set<string>(JSON.parse(session.team_ids))].sort(),
+            ) === audienceKey,
+        );
+      const cid = existing?.conversation_id || id();
+      if (
+        existing &&
+        existing.state !== "ended" &&
+        existing.expires_at > Date.now()
+      ) {
+        db.run(
+          "UPDATE broadcast_sessions SET expires_at=? WHERE conversation_id=?",
+          Date.now() + 120000,
+          cid,
+        );
+        return {
+          id: cid,
+          recipientCount: db.all(
+            "SELECT user_id FROM members WHERE conversation_id=? AND user_id!=?",
+            cid,
+            a.id,
+          ).length,
+        };
+      }
+      if (existing) {
+        await c.closeChannel(cid);
+        c.event("permissions", {}, cid);
+      }
       db.transaction(() => {
         db.run(
-          "INSERT INTO conversations(id,name,kind,pair) VALUES(?,?,'broadcast',NULL)",
+          "INSERT INTO conversations(id,name,kind,pair) VALUES(?,?,'broadcast',NULL) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
           cid,
           b.everyone
             ? "Admin broadcast · Everyone"
             : "Admin broadcast · " +
-                b.teamIds
+                teamIds
                   .map(
                     (t) => db.get("SELECT name FROM teams WHERE id=?", t).name,
                   )
                   .join(", "),
         );
+        db.run("DELETE FROM members WHERE conversation_id=?", cid);
         for (const uid of new Set([...recipients, a.id]))
           db.run("INSERT INTO members VALUES(?,?)", cid, uid);
         db.run(
-          "INSERT INTO broadcast_sessions VALUES(?,?,?,'preparing',?)",
+          "INSERT INTO broadcast_sessions VALUES(?,?,?,'preparing',?) ON CONFLICT(conversation_id) DO UPDATE SET team_ids=excluded.team_ids,state='preparing',expires_at=excluded.expires_at",
           cid,
           a.id,
-          JSON.stringify(b.everyone ? [] : b.teamIds),
+          audienceKey,
           Date.now() + 120000,
         );
       });
@@ -744,15 +811,16 @@ export function registerPhase2(c: Context) {
       issue(a, b.id);
       return old;
     }
-    const t = team(a.id);
-    if (b.audience === "team" && !(a.role === "admin" ? b.teamId : t?.id))
-      bad(400, "An operational team is required");
     const tid =
-      b.audience === "team" ? (a.role === "admin" ? b.teamId : t.id) : null;
+      b.audience === "team"
+        ? b.teamId || (a.role !== "admin" ? team(a.id)?.id : undefined)
+        : null;
+    if (b.audience === "team" && !tid)
+      bad(400, "An assigned channel is required");
     if (tid && !db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
-      bad(400, "Team unavailable");
-    if (a.role !== "admin" && b.teamId && b.teamId !== t?.id)
-      bad(403, "Team assignment changed; choose the current team");
+      bad(400, "Channel unavailable");
+    if (a.role !== "admin" && b.teamId && !belongs(a.id, b.teamId))
+      bad(403, "You are not assigned to this channel");
     if (b.zoneId && !db.get("SELECT 1 FROM venue_zones WHERE id=?", b.zoneId))
       bad(400, "Zone unavailable");
     return db.transaction(() => {

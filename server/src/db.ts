@@ -29,7 +29,7 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS operational_teams(team_id TEXT PRIMARY KEY REFERENCES teams(id),channel_id TEXT UNIQUE NOT NULL REFERENCES conversations(id),media_epoch INTEGER NOT NULL DEFAULT 1);
-      CREATE TABLE IF NOT EXISTS operational_assignments(user_id TEXT PRIMARY KEY REFERENCES users(id),team_id TEXT NOT NULL REFERENCES operational_teams(team_id));
+      CREATE TABLE IF NOT EXISTS operational_assignments(user_id TEXT NOT NULL REFERENCES users(id),team_id TEXT NOT NULL REFERENCES operational_teams(team_id),PRIMARY KEY(user_id,team_id));
       CREATE TABLE IF NOT EXISTS phase_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS venue_floors(id TEXT PRIMARY KEY,name TEXT NOT NULL,image_id TEXT,revision INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS venue_zones(id TEXT PRIMARY KEY,floor_id TEXT NOT NULL REFERENCES venue_floors(id),name TEXT NOT NULL,x REAL NOT NULL CHECK(x BETWEEN 0 AND 1),y REAL NOT NULL CHECK(y BETWEEN 0 AND 1));
@@ -46,6 +46,23 @@ export class Store {
       CREATE TABLE IF NOT EXISTS message_transcripts(message_id TEXT PRIMARY KEY REFERENCES messages(id),attachment_id TEXT NOT NULL,text TEXT NOT NULL DEFAULT '',state TEXT NOT NULL CHECK(state IN ('pending','processing','ready','unavailable','failed')),language TEXT NOT NULL DEFAULT 'en-US',engine TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL);
       INSERT OR IGNORE INTO schema_migrations VALUES(3,strftime('%s','now')*1000);
     `);
+    if (
+      !this.all("PRAGMA table_info(operational_assignments)").some(
+        (c) => c.name === "team_id" && c.pk,
+      )
+    ) {
+      this.transaction(() =>
+        this.db.exec(`
+        CREATE TABLE operational_assignments_multi(user_id TEXT NOT NULL REFERENCES users(id),team_id TEXT NOT NULL REFERENCES operational_teams(team_id),PRIMARY KEY(user_id,team_id));
+        INSERT INTO operational_assignments_multi SELECT user_id,team_id FROM operational_assignments;
+        DROP TABLE operational_assignments;
+        ALTER TABLE operational_assignments_multi RENAME TO operational_assignments;
+      `),
+      );
+    }
+    this.db.exec(
+      "INSERT OR IGNORE INTO schema_migrations VALUES(4,strftime('%s','now')*1000)",
+    );
   }
   run(sql: string, ...args: any[]) {
     return this.db.prepare(sql).run(...args);
