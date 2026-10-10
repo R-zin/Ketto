@@ -38,8 +38,10 @@ try {
       (a) =>
         !a.id ||
         !a.email ||
-        typeof a.password !== "string" ||
-        a.password.length < 12,
+        (a.password !== null &&
+          (typeof a.password !== "string" || a.password.length < 12)) ||
+        (a.number !== undefined &&
+          (!Number.isInteger(a.number) || a.number < 1 || a.number > 50)),
     )
   )
     throw new Error(
@@ -47,7 +49,7 @@ try {
     );
   const accounts = prepareTestAccounts(db, count, saved);
   const merged = [
-    ...saved.filter((a) => !accounts.some((n) => n.email === a.email)),
+    ...saved.filter((a) => !accounts.some((n) => n.id === a.id)),
     ...accounts,
   ];
   // Save recoverable credentials before inserting users; a retry can finish interrupted setup.
@@ -63,7 +65,7 @@ try {
     accounts.map(({ name, email, password }) => ({
       name,
       username: email,
-      password,
+      password: password ?? "Changed by admin; use the current password",
     })),
   );
   console.log(`Credentials saved locally in ${credentialsFile}`);

@@ -25,7 +25,7 @@ test("test-account helper is repeatable, preserves passwords and approves only r
       const u = db.get("SELECT * FROM users WHERE id=?", account.id);
       assert.equal(u.role, "staff");
       assert.equal(u.approved, 1);
-      assert.ok(passwordMatches(account.password, u.password));
+      assert.ok(passwordMatches(account.password!, u.password));
       assert.ok(
         db.get(
           "SELECT 1 FROM members WHERE user_id=? AND conversation_id='all-staff'",
@@ -67,6 +67,26 @@ test("test-account helper is repeatable, preserves passwords and approves only r
     const more = prepareTestAccounts(db, 4, accounts);
     saveTestAccounts(db, more);
     assert.equal(db.get("SELECT COUNT(*) n FROM users").n, 5);
+    const changedPassword = passwordHash("new-admin-set-password");
+    db.run(
+      "UPDATE users SET email=?,password=? WHERE id=?",
+      "volunteer.updated@test.invalid",
+      changedPassword,
+      accounts[0].id,
+    );
+    const legacySaved = accounts.map(({ number, ...account }) => account);
+    const afterEdit = prepareTestAccounts(db, 3, legacySaved);
+    assert.equal(afterEdit[0].id, accounts[0].id);
+    assert.equal(afterEdit[0].email, "volunteer.updated@test.invalid");
+    assert.equal(afterEdit[0].password, null);
+    assert.equal(afterEdit[0].number, 1);
+    saveTestAccounts(db, afterEdit);
+    assert.equal(db.get("SELECT COUNT(*) n FROM users").n, 5);
+    assert.equal(
+      db.get("SELECT password FROM users WHERE id=?", accounts[0].id).password,
+      changedPassword,
+    );
+    assert.deepEqual(prepareTestAccounts(db, 3, afterEdit), afterEdit);
   } finally {
     db.db.close();
     await rm(directory, { recursive: true, force: true });

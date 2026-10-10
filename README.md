@@ -63,6 +63,8 @@ Kettoo is a private communications and coordination app for event teams. It comb
 
 The React console provides Operations, Threads, Communications, People, Organisation, and Settings views. Admins manage organisation access, devices, teams, assignments, duty admin, broadcasts, floors, and zones. Staff use permitted conversations, issue workflows, check-ins, and media. The console supports live media through LiveKit but does not provide Android Nearby transport.
 
+Under Organisation > Volunteers & device approval, **Add volunteer** creates an approved staff account with a name, email, and password of at least 12 characters. **Edit login** updates a volunteer's email and optionally sets a new password; leave the password blank to keep it. Password resets end active sessions and live communication. Account IDs, channel assignments, location check-ins, and history are preserved, and device approval remains a separate control. Administrator accounts cannot be edited through these volunteer controls.
+
 ### Not included
 
 Multi-hop mesh forwarding, cloud AI, automatic staff allocation or escalation, GPS dispatch, offline private calls, group video calls, always-open microphone, and guaranteed locked-screen hardware PTT are outside the current implementation. Device-specific behavior such as background keys, audio routing, recognition accuracy, and power management should be acceptance-tested on the phones used by an organisation.
@@ -98,6 +100,8 @@ setup-test-users.bat --approve-devices
 ```
 
 The test-account helper creates `vol1@kettoo.local`, `vol2@kettoo.local`, and `vol3@kettoo.local` with individually generated passwords, displays their credentials, and keeps them in the ignored `DATA_DIR/test-users.json`. Use the full email as the sign-in username. Re-running preserves passwords and existing accounts; `--count 5` adds accounts through Vol 5. Volunteer accounts created by the helper are approved, but their new devices still require approval. After their first sign-in, `--approve-devices` approves only these helper-owned test accounts' pending devices. Assign them to the desired channels under Organisation > Channels & memberships. Normal registrations still require approval.
+
+The helper follows each account's ID if an admin changes its email. If its password has been reset, startup preserves it and displays “Changed by admin; use the current password” instead of an outdated password.
 
 For manual startup:
 

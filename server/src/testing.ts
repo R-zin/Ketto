@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { Store, id } from "./db.js";
-import { passwordHash } from "./security.js";
+import { passwordHash, passwordMatches } from "./security.js";
 
 export type TestAccount = {
   id: string;
   name: string;
   email: string;
-  password: string;
+  password: string | null;
+  number?: number;
 };
 
 /** Prepare numbered accounts without resetting unrelated or existing credentials. */
@@ -20,7 +21,33 @@ export function prepareTestAccounts(
   const accounts: TestAccount[] = [];
   for (let n = 1; n <= count; n++) {
     const email = `vol${n}@kettoo.local`;
-    const old = saved.find((a) => a.email === email);
+    const old = saved.find(
+      (a) => a.number === n || (!a.number && a.email === email),
+    );
+    const current =
+      old &&
+      db.get(
+        "SELECT id,name,email,role,password FROM users WHERE id=?",
+        old.id,
+      );
+    if (current) {
+      if (current.role !== "staff")
+        throw new Error(
+          "Test account identity changed; no accounts were updated.",
+        );
+      accounts.push({
+        id: current.id,
+        name: current.name,
+        email: current.email,
+        number: n,
+        // Admin-set passwords cannot be recovered. Never print stale credentials.
+        password:
+          old.password && passwordMatches(old.password, current.password)
+            ? old.password
+            : null,
+      });
+      continue;
+    }
     const existing = db.get("SELECT id,role FROM users WHERE email=?", email);
     if (
       existing &&
@@ -30,12 +57,15 @@ export function prepareTestAccounts(
         `${email} already exists outside this helper. Its account and password were left unchanged.`,
       );
     accounts.push(
-      old || {
-        id: id(),
-        name: `Vol ${n}`,
-        email,
-        password: `Vol${n}-${randomBytes(9).toString("base64url")}!`,
-      },
+      old
+        ? { ...old, number: n }
+        : {
+            id: id(),
+            number: n,
+            name: `Vol ${n}`,
+            email,
+            password: `Vol${n}-${randomBytes(9).toString("base64url")}!`,
+          },
     );
   }
   return accounts;
@@ -49,7 +79,8 @@ export function saveTestAccounts(
   db.transaction(() => {
     for (const account of accounts) {
       const existing = db.get(
-        "SELECT id,role FROM users WHERE email=?",
+        "SELECT id,role FROM users WHERE id=? OR email=? COLLATE NOCASE",
+        account.id,
         account.email,
       );
       if (existing && (existing.id !== account.id || existing.role !== "staff"))
@@ -57,6 +88,8 @@ export function saveTestAccounts(
           "Test account identity changed; no accounts were updated.",
         );
       if (!existing) {
+        if (!account.password)
+          throw new Error("A password is required to create a test account.");
         db.run(
           "INSERT INTO users VALUES(?,?,?,?, 'staff',1)",
           account.id,

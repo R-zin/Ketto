@@ -357,7 +357,7 @@ export async function buildApp(
   app.post(
     "/api/login",
     { config: { rateLimit: { max: 15, timeWindow: "5 minutes" } } },
-    async (req) => {
+    async (req) => serial(async () => {
       const b = z
         .object({
           email: z.string().email(),
@@ -423,7 +423,7 @@ export async function buildApp(
         deviceId: d.id,
         user: { id: u.id, name: u.name, role: u.role },
       };
-    },
+    }),
   );
   app.post("/api/logout", async (req) => {
     const a = auth(req);
@@ -1091,6 +1091,66 @@ export async function buildApp(
       mediaConfigured: media.configured,
     };
   });
+  const volunteerEmail = z.string().trim().email().max(200).transform(value => value.toLowerCase());
+  const volunteerPassword = z.string().min(12).max(128);
+  app.post("/api/admin/volunteers", async req => serial(async () => {
+    const a = admin(req);
+    const b = z.object({
+      name: z.string().trim().min(2).max(80),
+      email: volunteerEmail,
+      password: volunteerPassword,
+    }).strict().parse(req.body);
+    if (db.get("SELECT id FROM users WHERE email=? COLLATE NOCASE", b.email))
+      fail(409, "This email is already used by another account");
+    const uid = id();
+    db.transaction(() => {
+      db.run("INSERT INTO users VALUES(?,?,?,?,'staff',1)", uid, b.name, b.email, passwordHash(b.password));
+      db.run("INSERT INTO members VALUES(?,?)", "all-staff", uid);
+      db.audit(a.id, "create-volunteer", uid);
+    });
+    event("permissions", {});
+    event("operations.changed", {});
+    return db.get("SELECT id,name,email,role,approved FROM users WHERE id=?", uid);
+  }));
+  app.put("/api/admin/volunteers/:uid", async req => serial(async () => {
+    const a = admin(req), { uid } = req.params as any;
+    const b = z.object({
+      email: volunteerEmail.optional(),
+      password: volunteerPassword.optional(),
+    }).strict().refine(value => value.email !== undefined || value.password !== undefined, {
+      message: "Provide an email or a new password",
+    }).parse(req.body);
+    const u = db.get("SELECT * FROM users WHERE id=?", uid);
+    if (!u) fail(404, "Volunteer not found");
+    if (u.role !== "staff") fail(403, "Only volunteer sign-ins can be edited here");
+    if (b.email && db.get("SELECT id FROM users WHERE email=? COLLATE NOCASE AND id!=?", b.email, uid))
+      fail(409, "This email is already used by another account");
+    db.transaction(() => {
+      if (b.email && b.email !== u.email) {
+        db.run("UPDATE users SET email=? WHERE id=?", b.email, uid);
+        db.audit(a.id, "change-volunteer-email", uid);
+      }
+      if (b.password !== undefined) {
+        db.run("UPDATE users SET password=? WHERE id=?", passwordHash(b.password), uid);
+        db.run("DELETE FROM sessions WHERE user_id=?", uid);
+        db.audit(a.id, "reset-volunteer-password", uid);
+      }
+    });
+    if (b.password !== undefined) {
+      // Invalidate pending connections as well as HTTP sessions. Login shares
+      // the serial queue so a fresh sign-in cannot race this device cleanup.
+      for (const [key, ticket] of tickets)
+        if (ticket.auth.id === uid) tickets.delete(key);
+      for (const [device, p] of online) if (p.user === uid) {
+        online.delete(device);
+        p.socket.close(4001, "Password changed; sign in again");
+      }
+      for (const d of db.all("SELECT id FROM devices WHERE user_id=?", uid))
+        await disconnectDevice(d.id);
+    }
+    event("operations.changed", {});
+    return { ...db.get("SELECT id,name,email,role,approved FROM users WHERE id=?", uid), passwordChanged: b.password !== undefined };
+  }));
   app.post("/api/admin/users/:uid/approval", async (req) =>
     serial(async () => {
       const a = admin(req),

@@ -699,6 +699,54 @@ aside nav button.active {
   margin-top: 5px;
   color: #777;
 }
+.volunteer-toolbar, .volunteer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.volunteer-toolbar {
+  justify-content: space-between;
+  padding: 12px 0;
+}
+.volunteer-toolbar p {
+  flex: 1;
+  margin: 0;
+  color: #666;
+  min-width: 180px;
+}
+.volunteer-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+  background: #f6f6f5;
+  padding: 20px;
+}
+.volunteer-edit, .volunteer-notice {
+  width: 100%;
+}
+.volunteer-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 700;
+}
+.volunteer-form input {
+  width: 100%;
+  font-weight: 400;
+}
+.volunteer-help, .volunteer-actions {
+  grid-column: 1 / -1;
+}
+.volunteer-help {
+  margin: 0;
+  color: #666;
+  font-size: 12px;
+}
+.volunteer-notice {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
 .devices {
   width: 100%;
   background: #f6f6f5;

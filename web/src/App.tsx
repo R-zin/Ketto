@@ -31,6 +31,7 @@ import {
   pauseUploads,
 } from "./api";
 import { Coordinator } from "./media";
+import { AddVolunteer, VolunteerLogin } from "./VolunteerAdmin";
 import Operations, {
   useOperations,
   LocationControl,
@@ -461,8 +462,13 @@ export default function App() {
           if (!cancelled) timer = setTimeout(connect, 2500);
         };
         ws.onerror = () => ws.close();
-      } catch (e) {
+      } catch (e: any) {
         setOnline(false);
+        if (!cancelled && e.status === 401) {
+          cancelled = true;
+          await logout();
+          return;
+        }
         if (!cancelled) timer = setTimeout(connect, 5000);
       }
     };
@@ -1434,7 +1440,8 @@ export default function App() {
                 </button>
               </div>
               <section className="admin-panel">
-                <div className="section-title">MEMBER & DEVICE APPROVAL</div>
+                <div className="section-title">VOLUNTEERS & DEVICE APPROVAL</div>
+                <AddVolunteer save={action} />
                 {overview.users.map((u: any) => (
                   <div className="member-row" key={u.id}>
                     <div>
@@ -1458,6 +1465,7 @@ export default function App() {
                         {u.approved ? "Revoke" : "Approve member"}
                       </button>
                     )}
+                    {u.role === "staff" && <VolunteerLogin volunteer={u} save={action} />}
                     <div className="devices">
                       {u.devices.map((d: any) => (
                         <div key={d.id}>
