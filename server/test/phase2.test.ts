@@ -165,6 +165,542 @@ async function fixture() {
     },
   };
 }
+test("channel renaming keeps memberships and history and updates broadcast labels", async () => {
+  const f = await fixture();
+  try {
+    const { req, admin, alice, stage, security } = f;
+    const iid = await f.create();
+    const mid = randomUUID();
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/conversations/${stage.channelId}/messages`,
+          {
+            id: mid,
+            kind: "text",
+            text: "Keep this message",
+            createdAt: Date.now(),
+          },
+          alice,
+        )
+      ).statusCode,
+      200,
+    );
+    const broadcast = (
+      await req(
+        "POST",
+        "/api/admin/broadcasts",
+        { teamIds: [stage.id, security.id] },
+        admin,
+      )
+    ).json();
+    const path = `/api/admin/channels/${stage.channelId}`;
+    assert.equal(
+      (await req("PUT", path, { name: "Main hall" }, alice)).statusCode,
+      403,
+    );
+    assert.equal(
+      (await req("PUT", path, { name: "Security" }, admin)).statusCode,
+      409,
+    );
+    assert.equal(
+      (await req("PUT", path, { name: " " }, admin)).statusCode,
+      400,
+    );
+    const renamed = await req("PUT", path, { name: " Main hall " }, admin);
+    assert.equal(renamed.statusCode, 200, renamed.body);
+    const channels = (
+      await req("GET", "/api/conversations", undefined, admin)
+    ).json();
+    assert.equal(
+      channels.find((c: any) => c.id === stage.channelId).name,
+      "Main hall",
+    );
+    assert.match(
+      channels.find((c: any) => c.id === broadcast.id).name,
+      /Main hall/,
+    );
+    assert.match(
+      channels.find((c: any) => c.id === broadcast.id).name,
+      /Security/,
+    );
+    const ops = (await req("GET", "/api/operations", undefined, alice)).json();
+    assert.equal(
+      ops.channelMemberships.find((t: any) => t.id === stage.id).name,
+      "Main hall",
+    );
+    assert.ok(
+      (
+        await req(
+          "GET",
+          `/api/conversations/${stage.channelId}/messages`,
+          undefined,
+          alice,
+        )
+      )
+        .json()
+        .messages.some((m: any) => m.id === mid),
+    );
+    assert.equal(
+      (await req("GET", `/api/threads/${iid}`, undefined, alice)).statusCode,
+      200,
+    );
+    assert.equal(
+      (
+        await req(
+          "PUT",
+          "/api/admin/channels/all-staff",
+          { name: "Oops" },
+          admin,
+        )
+      ).statusCode,
+      404,
+    );
+    await req("DELETE", path, undefined, admin);
+    assert.equal(
+      (await req("PUT", path, { name: "Archived rename" }, admin)).statusCode,
+      409,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("map people counts include admins and count multiple devices only once", async () => {
+  const f = await fixture();
+  try {
+    const { req, admin, alice, bob, zone } = f;
+    for (const u of [admin, alice, bob])
+      await req(
+        "POST",
+        "/api/checkins",
+        { id: randomUUID(), zoneId: zone.id, reportedAt: Date.now() },
+        u,
+      );
+    const second = await req("POST", "/api/login", {
+      email: "admin@kettoo.local",
+      password: "phase2-admin-password",
+      deviceName: "Second test device",
+    });
+    const deviceId = second.json().deviceId;
+    await req(
+      "POST",
+      `/api/admin/devices/${deviceId}/approval`,
+      { approved: true },
+      admin,
+    );
+    const secondAdmin = (
+      await req("POST", "/api/login", {
+        email: "admin@kettoo.local",
+        password: "phase2-admin-password",
+        deviceId,
+      })
+    ).json();
+    await f.connect(admin, []);
+    await f.connect(secondAdmin, []);
+    await f.connect(alice, []);
+    const ops = (await req("GET", "/api/operations", undefined, admin)).json();
+    const counted = ops.zones.find((z: any) => z.id === zone.id);
+    assert.equal(counted.reportedPeople, 3);
+    assert.equal(counted.onDutyPeople, 2);
+    assert.equal(counted.volunteers, 1);
+    assert.ok(ops.people.some((p: any) => p.id === admin.user.id));
+    assert.ok(!ops.volunteers.some((p: any) => p.id === admin.user.id));
+    const staffOps = (
+      await req("GET", "/api/operations", undefined, alice)
+    ).json();
+    assert.deepEqual(staffOps.people, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("zone removal clears only its locations and preserves floors and issue history", async () => {
+  const f = await fixture();
+  try {
+    const { req, admin, alice, bob, floor, zone } = f;
+    const iid = await f.create();
+    const rid = randomUUID();
+    await req(
+      "POST",
+      `/api/threads/${iid}/replies`,
+      { id: rid, text: "Keep follow-up", createdAt: Date.now() },
+      alice,
+    );
+    const other = (
+      await req(
+        "POST",
+        "/api/admin/zones",
+        { floorId: floor.id, name: "Canteen", x: 0.7, y: 0.4 },
+        admin,
+      )
+    ).json();
+    for (const [u, z] of [
+      [alice, zone],
+      [bob, other],
+    ]) {
+      assert.equal(
+        (
+          await req(
+            "POST",
+            "/api/checkins",
+            { id: randomUUID(), zoneId: z.id, reportedAt: Date.now() },
+            u,
+          )
+        ).statusCode,
+        200,
+      );
+    }
+    const path = `/api/admin/zones/${zone.id}`;
+    assert.equal((await req("DELETE", path, undefined, alice)).statusCode, 403);
+    assert.deepEqual((await req("DELETE", path, undefined, admin)).json(), {
+      ok: true,
+      clearedCheckins: 1,
+    });
+    const ops = (await req("GET", "/api/operations", undefined, admin)).json();
+    assert.ok(ops.floors.some((x: any) => x.id === floor.id));
+    assert.ok(ops.zones.some((x: any) => x.id === other.id));
+    assert.ok(!ops.zones.some((x: any) => x.id === zone.id));
+    assert.equal(
+      (await req("GET", "/api/operations", undefined, alice)).json().checkin,
+      null,
+    );
+    assert.equal(
+      (await req("GET", "/api/operations", undefined, bob)).json().checkin
+        .zone_id,
+      other.id,
+    );
+    const retained = (
+      await req("GET", `/api/threads/${iid}`, undefined, alice)
+    ).json();
+    assert.equal(retained.zone_id, null);
+    assert.ok(retained.replies.some((r: any) => r.id === rid));
+    assert.equal((await req("DELETE", path, undefined, admin)).statusCode, 404);
+    assert.equal(
+      (await req("PUT", path, { name: "Gone", x: 0.3, y: 0.4 }, admin))
+        .statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          "/api/checkins",
+          { id: randomUUID(), zoneId: zone.id, reportedAt: Date.now() },
+          alice,
+        )
+      ).statusCode,
+      400,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("deleted channels stop active use, preserve history and restore multiple memberships", async () => {
+  const f = await fixture();
+  try {
+    const { req, admin, alice, stage, security } = f;
+    await req(
+      "PUT",
+      `/api/admin/operational-assignments/${alice.user.id}`,
+      { teamId: security.id, assigned: true },
+      admin,
+    );
+    const issueId = await f.create();
+    const messageId = randomUUID();
+    const sent = await req(
+      "POST",
+      `/api/conversations/${stage.channelId}/messages`,
+      {
+        id: messageId,
+        kind: "text",
+        text: "Keep this channel history",
+        createdAt: Date.now(),
+      },
+      alice,
+    );
+    assert.equal(sent.statusCode, 200, sent.body);
+    const replyId = randomUUID();
+    await req(
+      "POST",
+      `/api/threads/${issueId}/replies`,
+      { id: replyId, text: "Keep this follow-up", createdAt: Date.now() },
+      alice,
+    );
+    const broadcast = (
+      await req("POST", "/api/admin/broadcasts", { teamIds: [stage.id] }, admin)
+    ).json();
+    const everyone = (
+      await req(
+        "POST",
+        "/api/admin/broadcasts",
+        { teamIds: [], everyone: true },
+        admin,
+      )
+    ).json();
+    const privateChannel = (
+      await req("POST", "/api/private", { userId: f.bob.user.id }, alice)
+    ).json();
+    f.closed.length = 0;
+    assert.equal(
+      (
+        await req(
+          "DELETE",
+          `/api/admin/channels/${stage.channelId}`,
+          undefined,
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (await req("DELETE", "/api/admin/channels/all-staff", undefined, admin))
+        .statusCode,
+      400,
+    );
+    assert.equal(
+      (
+        await req(
+          "DELETE",
+          `/api/admin/channels/${privateChannel.id}`,
+          undefined,
+          admin,
+        )
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (
+        await req(
+          "DELETE",
+          `/api/admin/channels/${stage.channelId}`,
+          undefined,
+          admin,
+        )
+      ).statusCode,
+      200,
+    );
+    assert.ok(
+      f.closed.some((room) =>
+        room.includes(`:conversation-${stage.channelId}:`),
+      ),
+    );
+    assert.ok(
+      f.closed.some((room) =>
+        room.includes(`:conversation-${privateChannel.id}:`),
+      ),
+    );
+    assert.ok(
+      f.closed.some((room) => room.includes(`:conversation-${broadcast.id}:`)),
+    );
+    assert.ok(
+      !f.closed.some((room) => room.includes(`:conversation-${everyone.id}:`)),
+    );
+    const active = (
+      await req("GET", "/api/conversations", undefined, alice)
+    ).json();
+    assert.ok(!active.some((c: any) => c.id === stage.channelId));
+    assert.ok(active.some((c: any) => c.id === security.channelId));
+    const ops = (await req("GET", "/api/operations", undefined, alice)).json();
+    assert.deepEqual(
+      ops.channelMemberships.map((t: any) => t.id),
+      [security.id],
+    );
+    assert.ok(!ops.teams.some((t: any) => t.id === stage.id));
+    assert.ok(ops.issues.some((i: any) => i.id === issueId));
+    assert.equal(
+      (
+        await req(
+          "GET",
+          `/api/conversations/${stage.channelId}/messages`,
+          undefined,
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/conversations/${stage.channelId}/media-token`,
+          {},
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          "/api/admin/broadcasts",
+          { teamIds: [stage.id] },
+          admin,
+        )
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (
+        await req(
+          "PUT",
+          `/api/admin/operational-assignments/${alice.user.id}`,
+          { teamId: stage.id, assigned: true },
+          admin,
+        )
+      ).statusCode,
+      400,
+    );
+    assert.ok(
+      (await req("GET", "/api/admin/overview", undefined, admin))
+        .json()
+        .channels.find((c: any) => c.id === stage.channelId).archived,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/admin/channels/${stage.channelId}/restore`,
+          {},
+          alice,
+        )
+      ).statusCode,
+      403,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          `/api/admin/channels/${stage.channelId}/restore`,
+          {},
+          admin,
+        )
+      ).statusCode,
+      200,
+    );
+    assert.ok(
+      (await req("GET", "/api/conversations", undefined, alice))
+        .json()
+        .some((c: any) => c.id === stage.channelId),
+    );
+    const restored = (
+      await req(
+        "GET",
+        "/api/conversations/" + stage.channelId + "/messages",
+        undefined,
+        alice,
+      )
+    ).json();
+    assert.ok(restored.messages.some((m: any) => m.id === messageId));
+    assert.deepEqual(
+      new Set(
+        (await req("GET", "/api/operations", undefined, alice))
+          .json()
+          .channelMemberships.map((t: any) => t.id),
+      ),
+      new Set([stage.id, security.id]),
+    );
+    assert.ok(
+      (await req("GET", `/api/threads/${issueId}`, undefined, alice))
+        .json()
+        .replies.some((r: any) => r.id === replyId),
+    );
+    assert.equal(
+      (await req("DELETE", "/api/admin/channels/nonexistent", undefined, admin))
+        .statusCode,
+      404,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+test("venue template is shared with mobile clients, retry safe and requires admin", async () => {
+  const f = await fixture();
+  try {
+    const template = {
+      floors: [
+        {
+          id: "example-test-floor-2",
+          name: "Floor 2",
+          zones: [
+            { id: "example-test-hall-201", name: "Hall 201", x: 0.2, y: 0.3 },
+          ],
+        },
+        { id: "example-test-floor-4", name: "Floor 4", zones: [] },
+      ],
+    };
+    assert.equal(
+      (await f.req("POST", "/api/admin/venue-template", template, f.alice))
+        .statusCode,
+      403,
+    );
+    const saved = await f.req(
+      "POST",
+      "/api/admin/venue-template",
+      template,
+      f.admin,
+    );
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().floors.length, 2);
+    await f.req(
+      "PUT",
+      "/api/admin/zones/example-test-hall-201",
+      { name: "Updated hall", x: 0.4, y: 0.5 },
+      f.admin,
+    );
+    assert.equal(
+      (await f.req("POST", "/api/admin/venue-template", template, f.admin))
+        .statusCode,
+      200,
+    );
+    const ops = (
+      await f.req("GET", "/api/operations", undefined, f.alice)
+    ).json();
+    assert.equal(
+      ops.floors.filter((floor: any) => floor.id.startsWith("example-test-"))
+        .length,
+      2,
+    );
+    const zones = ops.zones.filter((zone: any) =>
+      zone.id.startsWith("example-test-"),
+    );
+    assert.equal(zones.length, 1);
+    assert.equal(zones[0].name, "Updated hall");
+    assert.equal(ops.checkin, null);
+    assert.equal(
+      (
+        await f.req(
+          "POST",
+          "/api/checkins",
+          { id: randomUUID(), zoneId: zones[0].id, reportedAt: Date.now() },
+          f.alice,
+        )
+      ).statusCode,
+      200,
+    );
+    const checkedIn = (
+      await f.req("GET", "/api/operations", undefined, f.alice)
+    ).json().checkin;
+    assert.equal(checkedIn.floor_id, "example-test-floor-2");
+    assert.equal(checkedIn.zone_name, "Updated hall");
+    assert.equal(
+      (
+        await f.req(
+          "POST",
+          "/api/admin/venue-template",
+          { floors: [...template.floors, template.floors[0]] },
+          f.admin,
+        )
+      ).statusCode,
+      400,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 test("broadcast preparation reuses canonical audiences and refreshes membership after ending", async () => {
   const f = await fixture();
   try {
@@ -486,6 +1022,112 @@ test("legacy assignment replacement separates private PTT from chat/calls", asyn
   }
 });
 
+test("floor removal is admin-only, clears zones and locations, and preserves issue history", async () => {
+  const f = await fixture();
+  try {
+    const { req, admin, alice, floor, zone } = f;
+    const iid = await f.create();
+    const before = (
+      await req("GET", `/api/threads/${iid}`, undefined, alice)
+    ).json();
+    const rid = randomUUID();
+    await req(
+      "POST",
+      `/api/threads/${iid}/replies`,
+      { id: rid, text: "Keep this follow-up", createdAt: Date.now() },
+      alice,
+    );
+    await req(
+      "POST",
+      "/api/checkins",
+      { id: randomUUID(), zoneId: zone.id, reportedAt: Date.now() },
+      alice,
+    );
+    const other = (
+      await req("POST", "/api/admin/floors", { name: "Other floor" }, admin)
+    ).json();
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2/8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    const upload = await f.app.inject({
+      method: "POST",
+      url: `/api/phase2/floors/${floor.id}/files`,
+      headers: {
+        authorization: "Bearer " + admin.token,
+        "content-type": "multipart/form-data; boundary=floor-removal",
+      },
+      payload: Buffer.concat([
+        Buffer.from(
+          '--floor-removal\r\nContent-Disposition: form-data; name="file"; filename="plan.png"\r\nContent-Type: image/png\r\n\r\n',
+        ),
+        image,
+        Buffer.from("\r\n--floor-removal--\r\n"),
+      ]),
+    });
+    assert.equal(upload.statusCode, 200, upload.body);
+    assert.equal(
+      (await req("DELETE", `/api/admin/floors/${floor.id}`, undefined, alice))
+        .statusCode,
+      403,
+    );
+    const removed = await req(
+      "DELETE",
+      `/api/admin/floors/${floor.id}`,
+      undefined,
+      admin,
+    );
+    assert.equal(removed.statusCode, 200, removed.body);
+    assert.deepEqual(removed.json(), {
+      ok: true,
+      removedZones: 1,
+      clearedCheckins: 1,
+    });
+    const data = (await req("GET", "/api/operations", undefined, admin)).json();
+    assert.ok(!data.floors.some((x: any) => x.id === floor.id));
+    assert.ok(data.floors.some((x: any) => x.id === other.id));
+    assert.ok(!data.zones.some((x: any) => x.id === zone.id));
+    assert.equal(
+      (await req("GET", "/api/operations", undefined, alice)).json().checkin,
+      null,
+    );
+    const retained = (
+      await req("GET", `/api/threads/${iid}`, undefined, alice)
+    ).json();
+    assert.equal(retained.zone_id, null);
+    assert.equal(retained.title, before.title);
+    assert.ok(retained.replies.some((r: any) => r.id === rid));
+    assert.equal(
+      (
+        await req(
+          "GET",
+          `/api/phase2/files/${upload.json().id}`,
+          undefined,
+          admin,
+        )
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await req(
+          "POST",
+          "/api/checkins",
+          { id: randomUUID(), zoneId: zone.id, reportedAt: Date.now() },
+          alice,
+        )
+      ).statusCode,
+      400,
+    );
+    assert.equal(
+      (await req("DELETE", `/api/admin/floors/${floor.id}`, undefined, admin))
+        .statusCode,
+      404,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 test("floor and restricted issue images are authenticated, durable and pause for PTT", async () => {
   const f = await fixture();
   try {

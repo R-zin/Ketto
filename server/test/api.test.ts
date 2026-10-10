@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { Media } from "../src/media.js";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, sign, randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { hash, Credentials } from "../src/security.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>, directory: string;
@@ -121,6 +122,79 @@ before(async () => {
 after(async () => {
   await app.close();
   await rm(directory, { recursive: true, force: true });
+});
+
+test("admin sign-in enrols new and pending devices while retaining explicit revocation and staff approval", async () => {
+  const signIn = (payload: any) =>
+    app.inject({
+      method: "POST",
+      url: "/api/login",
+      payload,
+      remoteAddress: "127.0.0.2",
+    });
+  const login = {
+    email: "admin@kettoo.local",
+    password: "admin-test-password",
+  };
+  const invalid = await signIn({
+    ...login,
+    password: "incorrect-password",
+  });
+  assert.equal(invalid.statusCode, 401);
+  const second = (
+    await signIn({
+      ...login,
+      deviceName: "Second admin browser",
+    })
+  ).json();
+  assert.ok(second.token);
+  assert.equal(second.pending, undefined);
+  assert.equal(
+    (await request("GET", "/api/admin/overview", undefined, second)).statusCode,
+    200,
+  );
+  const db = new DatabaseSync(join(directory, "kettoo.sqlite"));
+  const legacyId = randomUUID();
+  try {
+    db.prepare(
+      "INSERT INTO devices(id,user_id,name,approved) VALUES(?,?,?,0)",
+    ).run(legacyId, admin.user.id, "Previously pending browser");
+  } finally {
+    db.close();
+  }
+  const migrated = (await signIn({ ...login, deviceId: legacyId })).json();
+  assert.ok(migrated.token);
+  assert.equal(
+    (
+      await request(
+        "POST",
+        `/api/admin/devices/${legacyId}/approval`,
+        { approved: false },
+        admin,
+      )
+    ).statusCode,
+    200,
+  );
+  const revoked = (await signIn({ ...login, deviceId: legacyId })).json();
+  assert.equal(revoked.pending, true);
+  assert.equal(revoked.token, undefined);
+  assert.equal(
+    (await request("GET", "/api/me", undefined, migrated)).statusCode,
+    401,
+  );
+  assert.equal(
+    (await signIn({ ...login, deviceId: randomUUID() })).statusCode,
+    403,
+  );
+  const staff = (
+    await signIn({
+      email: "Alice@example.test",
+      password: "a-long-test-password",
+      deviceName: "New staff browser",
+    })
+  ).json();
+  assert.equal(staff.pending, true);
+  assert.equal(staff.token, undefined);
 });
 
 test("membership, admin role, and broadcast boundaries are enforced", async () => {
@@ -619,88 +693,369 @@ test("calls ring one device, reject an unrelated device, and enforce busy state"
 });
 
 test("acknowledging archives only the current person's copy and survives received retries", async () => {
-  const mid=crypto.randomUUID();
-  const sent=await request("POST",`/conversations/${channel}/messages`.replace(/^/,"/api"),{id:mid,text:"Security needed at Gate B",createdAt:Date.now()},alice);
-  assert.equal(sent.statusCode,200,sent.body);
-  assert.equal((await request("POST",`/api/messages/${mid}/receipt`,{state:"acknowledged"},bob)).statusCode,200);
-  await request("POST",`/api/messages/${mid}/receipt`,{state:"received"},bob);
-  const folder=async(user:any,name:string)=>(await request("GET",`/api/conversations/${channel}/messages?folder=${name}`,undefined,user)).json().messages;
-  assert.ok((await folder(bob,"archived")).some((m:any)=>m.id===mid));
-  assert.ok(!(await folder(bob,"active")).some((m:any)=>m.id===mid));
-  assert.ok((await folder(alice,"active")).some((m:any)=>m.id===mid));
-  assert.ok(!(await folder(alice,"archived")).some((m:any)=>m.id===mid));
-  assert.equal((await request("POST",`/api/messages/${mid}/receipt`,{state:"acknowledged"},alice)).statusCode,200);
-  assert.ok((await folder(alice,"archived")).some((m:any)=>m.id===mid));
+  const mid = crypto.randomUUID();
+  const sent = await request(
+    "POST",
+    `/conversations/${channel}/messages`.replace(/^/, "/api"),
+    { id: mid, text: "Security needed at Gate B", createdAt: Date.now() },
+    alice,
+  );
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.equal(
+    (
+      await request(
+        "POST",
+        `/api/messages/${mid}/receipt`,
+        { state: "acknowledged" },
+        bob,
+      )
+    ).statusCode,
+    200,
+  );
+  await request(
+    "POST",
+    `/api/messages/${mid}/receipt`,
+    { state: "received" },
+    bob,
+  );
+  const folder = async (user: any, name: string) =>
+    (
+      await request(
+        "GET",
+        `/api/conversations/${channel}/messages?folder=${name}`,
+        undefined,
+        user,
+      )
+    ).json().messages;
+  assert.ok((await folder(bob, "archived")).some((m: any) => m.id === mid));
+  assert.ok(!(await folder(bob, "active")).some((m: any) => m.id === mid));
+  assert.ok((await folder(alice, "active")).some((m: any) => m.id === mid));
+  assert.ok(!(await folder(alice, "archived")).some((m: any) => m.id === mid));
+  assert.equal(
+    (
+      await request(
+        "POST",
+        `/api/messages/${mid}/receipt`,
+        { state: "acknowledged" },
+        alice,
+      )
+    ).statusCode,
+    200,
+  );
+  assert.ok((await folder(alice, "archived")).some((m: any) => m.id === mid));
 });
 
 test("offline voice transcript stays on its audio message, deduplicates, and archives personally", async () => {
-  const audio=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypM4A "),Buffer.alloc(21)]);
-  const boundary="phase3-transcript";
-  const uploaded=await app.inject({method:"POST",url:`/api/conversations/${channel}/files`,headers:{authorization:"Bearer "+alice.token,"content-type":`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="note.m4a"\r\nContent-Type: audio/mp4\r\n\r\n`),audio,Buffer.from(`\r\n--${boundary}--\r\n`)])});
-  assert.equal(uploaded.statusCode,200,uploaded.body);
-  const body={id:crypto.randomUUID(),kind:"voice",attachmentId:uploaded.json().id,createdAt:Date.now(),transcript:{state:"ready",text:"security needed at gate b",engine:"vosk-small-en-us-0.15"}};
-  const sent=await request("POST",`/api/conversations/${channel}/messages`,body,alice);
-  assert.equal(sent.statusCode,200,sent.body);assert.equal(sent.json().transcript.text,body.transcript.text);
-  await request("POST",`/api/conversations/${channel}/messages`,body,alice);
-  const history=(await request("GET",`/api/conversations/${channel}/messages`,undefined,bob)).json().messages;
-  assert.equal(history.filter((m:any)=>m.id===body.id).length,1);
-  assert.equal(history.find((m:any)=>m.id===body.id).transcript.state,"ready");
-  await request("POST",`/api/messages/${body.id}/receipt`,{state:"acknowledged"},bob);
-  assert.equal((await request("GET",`/api/conversations/${channel}/messages?folder=archived`,undefined,bob)).json().messages.find((m:any)=>m.id===body.id).transcript.text,body.transcript.text);
-  assert.ok((await request("GET",`/api/conversations/${channel}/messages?folder=active`,undefined,alice)).json().messages.some((m:any)=>m.id===body.id));
+  const audio = Buffer.concat([
+    Buffer.from([0, 0, 0, 24]),
+    Buffer.from("ftypM4A "),
+    Buffer.alloc(21),
+  ]);
+  const boundary = "phase3-transcript";
+  const uploaded = await app.inject({
+    method: "POST",
+    url: `/api/conversations/${channel}/files`,
+    headers: {
+      authorization: "Bearer " + alice.token,
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+    },
+    payload: Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="note.m4a"\r\nContent-Type: audio/mp4\r\n\r\n`,
+      ),
+      audio,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  });
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  const body = {
+    id: crypto.randomUUID(),
+    kind: "voice",
+    attachmentId: uploaded.json().id,
+    createdAt: Date.now(),
+    transcript: {
+      state: "ready",
+      text: "security needed at gate b",
+      engine: "vosk-small-en-us-0.15",
+    },
+  };
+  const sent = await request(
+    "POST",
+    `/api/conversations/${channel}/messages`,
+    body,
+    alice,
+  );
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.equal(sent.json().transcript.text, body.transcript.text);
+  await request("POST", `/api/conversations/${channel}/messages`, body, alice);
+  const history = (
+    await request(
+      "GET",
+      `/api/conversations/${channel}/messages`,
+      undefined,
+      bob,
+    )
+  ).json().messages;
+  assert.equal(history.filter((m: any) => m.id === body.id).length, 1);
+  assert.equal(
+    history.find((m: any) => m.id === body.id).transcript.state,
+    "ready",
+  );
+  await request(
+    "POST",
+    `/api/messages/${body.id}/receipt`,
+    { state: "acknowledged" },
+    bob,
+  );
+  assert.equal(
+    (
+      await request(
+        "GET",
+        `/api/conversations/${channel}/messages?folder=archived`,
+        undefined,
+        bob,
+      )
+    )
+      .json()
+      .messages.find((m: any) => m.id === body.id).transcript.text,
+    body.transcript.text,
+  );
+  assert.ok(
+    (
+      await request(
+        "GET",
+        `/api/conversations/${channel}/messages?folder=active`,
+        undefined,
+        alice,
+      )
+    )
+      .json()
+      .messages.some((m: any) => m.id === body.id),
+  );
 });
 
 test("invalid transcripts and non-audio retries are rejected", async () => {
-  const mid=crypto.randomUUID();
-  await request("POST",`/api/conversations/${channel}/messages`,{id:mid,text:"ordinary text",createdAt:Date.now()},alice);
-  assert.equal((await request("POST",`/api/messages/${mid}/transcript/retry`,{},bob)).statusCode,400);
-  const invalid=await request("POST",`/api/conversations/${channel}/messages`,{id:crypto.randomUUID(),kind:"voice",attachmentId:"missing",createdAt:Date.now(),transcript:{state:"ready",text:""}},alice);
-  assert.equal(invalid.statusCode,400);
+  const mid = crypto.randomUUID();
+  await request(
+    "POST",
+    `/api/conversations/${channel}/messages`,
+    { id: mid, text: "ordinary text", createdAt: Date.now() },
+    alice,
+  );
+  assert.equal(
+    (await request("POST", `/api/messages/${mid}/transcript/retry`, {}, bob))
+      .statusCode,
+    400,
+  );
+  const invalid = await request(
+    "POST",
+    `/api/conversations/${channel}/messages`,
+    {
+      id: crypto.randomUUID(),
+      kind: "voice",
+      attachmentId: "missing",
+      createdAt: Date.now(),
+      transcript: { state: "ready", text: "" },
+    },
+    alice,
+  );
+  assert.equal(invalid.statusCode, 400);
 });
 
 test("Nearby live credentials separate team audio from private text rights", async () => {
-  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
-  const claims=JSON.parse(Buffer.from(issued.credential.split('.')[0],"base64url").toString());
-  assert.equal(claims.name,"Alice");
-  assert.ok(claims.liveConversations.some((c:any)=>c.id===channel&&c.canPublish&&c.epoch==="1"));
-  const privateChat=(await request("POST","/api/private",{userId:bob.id},alice)).json().id;
-  const fresh=(await request("POST","/api/offline/credential",{},alice)).json();
-  const live=JSON.parse(Buffer.from(fresh.credential.split('.')[0],"base64url").toString());
+  const issued = (
+    await request("POST", "/api/offline/credential", {}, alice)
+  ).json();
+  const claims = JSON.parse(
+    Buffer.from(issued.credential.split(".")[0], "base64url").toString(),
+  );
+  assert.equal(claims.name, "Alice");
+  assert.ok(
+    claims.liveConversations.some(
+      (c: any) => c.id === channel && c.canPublish && c.epoch === "1",
+    ),
+  );
+  const privateChat = (
+    await request("POST", "/api/private", { userId: bob.id }, alice)
+  ).json().id;
+  const fresh = (
+    await request("POST", "/api/offline/credential", {}, alice)
+  ).json();
+  const live = JSON.parse(
+    Buffer.from(fresh.credential.split(".")[0], "base64url").toString(),
+  );
   assert.ok(live.publishConversations.includes(privateChat));
-  assert.ok(!live.liveConversations.some((c:any)=>c.id===privateChat));
-  const envelope=JSON.stringify({id:crypto.randomUUID(),conversationId:privateChat,kind:"ptt",createdAt:Date.now()});
-  const result=await request("POST","/api/offline/sync",{credential:fresh.credential,envelope,signature:sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64")},bob);
-  assert.equal(result.statusCode,403);
+  assert.ok(!live.liveConversations.some((c: any) => c.id === privateChat));
+  const envelope = JSON.stringify({
+    id: crypto.randomUUID(),
+    conversationId: privateChat,
+    kind: "ptt",
+    createdAt: Date.now(),
+  });
+  const result = await request(
+    "POST",
+    "/api/offline/sync",
+    {
+      credential: fresh.credential,
+      envelope,
+      signature: sign(
+        "SHA256",
+        Buffer.from(envelope),
+        aliceKeys.privateKey,
+      ).toString("base64"),
+    },
+    bob,
+  );
+  assert.equal(result.statusCode, 403);
 });
 
 test("Nearby PTT replay keeps its identity and transcript across two uploaders and rejects changed live grants", async () => {
-  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
-  const audio=Buffer.concat([Buffer.from("RIFF"),Buffer.alloc(40),Buffer.from([1,0,2,0])]);
-  const upload=async(user:any)=>{const boundary="nearby-ptt";const result=await app.inject({method:"POST",url:`/api/conversations/${channel}/files`,headers:{authorization:"Bearer "+user.token,"content-type":`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ptt.wav"\r\nContent-Type: audio/wav\r\n\r\n`),audio,Buffer.from(`\r\n--${boundary}--\r\n`)])});assert.equal(result.statusCode,200,result.body);return result.json().id};
-  const data={id:crypto.randomUUID(),conversationId:channel,kind:"ptt",createdAt:Date.now(),size:audio.length,sha256:hash(audio)};
-  const envelope=JSON.stringify(data), signature=sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64");
-  const body={credential:issued.credential,envelope,signature,transcript:{state:"ready",text:"nearby live audio",engine:"vosk-small-en-us-0.15"}};
-  const recipient=await request("POST","/api/offline/sync",{...body,attachmentId:await upload(bob)},bob);
-  assert.equal(recipient.statusCode,200,recipient.body);assert.equal(recipient.json().kind,"ptt");assert.equal(recipient.json().sender_id,alice.id);assert.equal(recipient.json().transcript.text,"nearby live audio");
-  const origin=await request("POST","/api/offline/sync",{...body,attachmentId:await upload(alice)},alice);
-  assert.equal(origin.statusCode,200,origin.body);assert.equal(origin.json().seq,recipient.json().seq);
-  const claims=JSON.parse(Buffer.from(issued.credential.split('.')[0],"base64url").toString());
-  const issuer=new Credentials(directory);
-  for(const change of [(g:any)=>({...g,epoch:"old-epoch"}),(g:any)=>({...g,expiresAt:Date.now()-1000}),(g:any)=>({...g,canPublish:false})]){
-    const credential=issuer.issue({...claims,liveConversations:claims.liveConversations.map(change)});
-    const result=await request("POST","/api/offline/sync",{...body,credential,attachmentId:origin.json().attachment_id},alice);
-    assert.equal(result.statusCode,403,result.body);
+  const issued = (
+    await request("POST", "/api/offline/credential", {}, alice)
+  ).json();
+  const audio = Buffer.concat([
+    Buffer.from("RIFF"),
+    Buffer.alloc(40),
+    Buffer.from([1, 0, 2, 0]),
+  ]);
+  const upload = async (user: any) => {
+    const boundary = "nearby-ptt";
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${channel}/files`,
+      headers: {
+        authorization: "Bearer " + user.token,
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      },
+      payload: Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ptt.wav"\r\nContent-Type: audio/wav\r\n\r\n`,
+        ),
+        audio,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]),
+    });
+    assert.equal(result.statusCode, 200, result.body);
+    return result.json().id;
+  };
+  const data = {
+    id: crypto.randomUUID(),
+    conversationId: channel,
+    kind: "ptt",
+    createdAt: Date.now(),
+    size: audio.length,
+    sha256: hash(audio),
+  };
+  const envelope = JSON.stringify(data),
+    signature = sign(
+      "SHA256",
+      Buffer.from(envelope),
+      aliceKeys.privateKey,
+    ).toString("base64");
+  const body = {
+    credential: issued.credential,
+    envelope,
+    signature,
+    transcript: {
+      state: "ready",
+      text: "nearby live audio",
+      engine: "vosk-small-en-us-0.15",
+    },
+  };
+  const recipient = await request(
+    "POST",
+    "/api/offline/sync",
+    { ...body, attachmentId: await upload(bob) },
+    bob,
+  );
+  assert.equal(recipient.statusCode, 200, recipient.body);
+  assert.equal(recipient.json().kind, "ptt");
+  assert.equal(recipient.json().sender_id, alice.id);
+  assert.equal(recipient.json().transcript.text, "nearby live audio");
+  const origin = await request(
+    "POST",
+    "/api/offline/sync",
+    { ...body, attachmentId: await upload(alice) },
+    alice,
+  );
+  assert.equal(origin.statusCode, 200, origin.body);
+  assert.equal(origin.json().seq, recipient.json().seq);
+  const claims = JSON.parse(
+    Buffer.from(issued.credential.split(".")[0], "base64url").toString(),
+  );
+  const issuer = new Credentials(directory);
+  for (const change of [
+    (g: any) => ({ ...g, epoch: "old-epoch" }),
+    (g: any) => ({ ...g, expiresAt: Date.now() - 1000 }),
+    (g: any) => ({ ...g, canPublish: false }),
+  ]) {
+    const credential = issuer.issue({
+      ...claims,
+      liveConversations: claims.liveConversations.map(change),
+    });
+    const result = await request(
+      "POST",
+      "/api/offline/sync",
+      { ...body, credential, attachmentId: origin.json().attachment_id },
+      alice,
+    );
+    assert.equal(result.statusCode, 403, result.body);
   }
 });
 
-test("Nearby recipients can sync signed images and videos with matching attachment bytes",async()=>{
-  const issued=(await request("POST","/api/offline/credential",{},alice)).json();
-  for(const [kind,mime,bytes] of [["image","image/png",Buffer.from([137,80,78,71,13,10,26,10,0])],["video","video/mp4",Buffer.concat([Buffer.alloc(4),Buffer.from("ftyp"),Buffer.alloc(20)])]] as const){
-    const boundary="nearby-attachment";
-    const uploaded=await app.inject({method:"POST",url:`/api/conversations/${channel}/files`,headers:{authorization:"Bearer "+bob.token,"content-type":`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="attachment"\r\nContent-Type: ${mime}\r\n\r\n`),bytes,Buffer.from(`\r\n--${boundary}--\r\n`)])});
-    assert.equal(uploaded.statusCode,200,uploaded.body);
-    const envelope=JSON.stringify({id:crypto.randomUUID(),conversationId:channel,kind,createdAt:Date.now(),size:bytes.length,sha256:hash(bytes)});
-    const result=await request("POST","/api/offline/sync",{credential:issued.credential,envelope,signature:sign("SHA256",Buffer.from(envelope),aliceKeys.privateKey).toString("base64"),attachmentId:uploaded.json().id},bob);
-    assert.equal(result.statusCode,200,result.body);assert.equal(result.json().kind,kind);
+test("Nearby recipients can sync signed images and videos with matching attachment bytes", async () => {
+  const issued = (
+    await request("POST", "/api/offline/credential", {}, alice)
+  ).json();
+  for (const [kind, mime, bytes] of [
+    ["image", "image/png", Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0])],
+    [
+      "video",
+      "video/mp4",
+      Buffer.concat([Buffer.alloc(4), Buffer.from("ftyp"), Buffer.alloc(20)]),
+    ],
+  ] as const) {
+    const boundary = "nearby-attachment";
+    const uploaded = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${channel}/files`,
+      headers: {
+        authorization: "Bearer " + bob.token,
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      },
+      payload: Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="attachment"\r\nContent-Type: ${mime}\r\n\r\n`,
+        ),
+        bytes,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]),
+    });
+    assert.equal(uploaded.statusCode, 200, uploaded.body);
+    const envelope = JSON.stringify({
+      id: crypto.randomUUID(),
+      conversationId: channel,
+      kind,
+      createdAt: Date.now(),
+      size: bytes.length,
+      sha256: hash(bytes),
+    });
+    const result = await request(
+      "POST",
+      "/api/offline/sync",
+      {
+        credential: issued.credential,
+        envelope,
+        signature: sign(
+          "SHA256",
+          Buffer.from(envelope),
+          aliceKeys.privateKey,
+        ).toString("base64"),
+        attachmentId: uploaded.json().id,
+      },
+      bob,
+    );
+    assert.equal(result.statusCode, 200, result.body);
+    assert.equal(result.json().kind, kind);
   }
 });

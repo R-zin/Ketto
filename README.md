@@ -7,9 +7,10 @@ Kettoo is a private communications and coordination app for event teams. It comb
 ### Accounts, devices, and organisation
 
 - Staff can request an account and register a device. An administrator must approve the account and device before they can use the organisation.
+- Admins sign in with their existing credentials and automatically enrol new browsers/devices. Explicitly revoked accounts and devices remain blocked.
 - Administrators can review and approve or revoke accounts and devices. Revocation blocks new authenticated API access and removes active media access when the media service is reachable.
 - Every installation keeps a persistent organisation identity. Private data, credentials, and signing keys belong to the organisation's local server and data directory.
-- Admins manage teams, channels, team membership, volunteer operational assignments, and the designated duty-admin device. Each volunteer has one current operational team; communication access and physical location are managed separately.
+- Admins manage channels, volunteer memberships, and the designated duty-admin device. Volunteers can belong to multiple channels and switch channels when talking; communication access and physical location are managed separately.
 - Presence distinguishes connected devices, on-duty sessions, audio readiness, busy devices, and last seen.
 
 ### Conversations, messages, and attachments
@@ -80,6 +81,25 @@ docs/      Nearby behaviour and UI review notes
 ## Run the server and web app
 
 Requires **Node.js 24 or newer**. From the repository root:
+
+On Windows, double-click **`start.bat`**. It installs missing dependencies, builds the API and web dashboard, starts the local LiveKit audio service, prepares three volunteer test accounts, and opens the dashboard. The API serves the built web app; a separate Vite process is not needed. Existing `.env`, accounts, maps, messages, and passwords are preserved. Services run in the background; logs and the generated LiveKit configuration are under `DATA_DIR/runtime`.
+
+The launcher uses `tools/livekit-server.exe` or LiveKit on PATH and the credentials/address in `.env`. For a fresh checkout without `.env`, it creates local settings and saves the initial admin sign-in to `data/local-admin-sign-in.txt`. The default media address for a fresh checkout is localhost; set `LIVEKIT_URL` to the server's LAN address when testing with phones.
+
+Useful launcher options:
+
+```bat
+start.bat -NoBrowser
+start.bat -SkipBuild
+start.bat -NoMedia -NoTestUsers
+stop.bat
+setup-test-users.bat --count 3
+setup-test-users.bat --approve-devices
+```
+
+The test-account helper creates `vol1@kettoo.local`, `vol2@kettoo.local`, and `vol3@kettoo.local` with individually generated passwords, displays their credentials, and keeps them in the ignored `DATA_DIR/test-users.json`. Use the full email as the sign-in username. Re-running preserves passwords and existing accounts; `--count 5` adds accounts through Vol 5. Volunteer accounts created by the helper are approved, but their new devices still require approval. After their first sign-in, `--approve-devices` approves only these helper-owned test accounts' pending devices. Assign them to the desired channels under Organisation > Channels & memberships. Normal registrations still require approval.
+
+For manual startup:
 
 ```powershell
 npm ci

@@ -181,7 +181,7 @@ export async function buildApp(
   }
   function permitted(user: string, conversation: string) {
     return !!db.get(
-      "SELECT 1 FROM members WHERE conversation_id=? AND user_id=?",
+      "SELECT 1 FROM members WHERE conversation_id=? AND user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=members.conversation_id)",
       conversation,
       user,
     );
@@ -384,10 +384,8 @@ export async function buildApp(
       if (b.deviceId && !d) fail(403, "Unknown device");
       if (!d) {
         const did = id();
-        // Only the first administrator device is bootstrapped. Further devices need approval.
-        const initial =
-          u.role === "admin" &&
-          !db.get("SELECT id FROM devices WHERE user_id=?", u.id);
+        // Valid administrator credentials enrol new devices immediately.
+        const initial = u.role === "admin";
         db.run(
           "INSERT INTO devices(id,user_id,name,public_key,approved) VALUES(?,?,?,?,?)",
           did,
@@ -397,6 +395,19 @@ export async function buildApp(
           initial ? 1 : 0,
         );
         d = db.get("SELECT * FROM devices WHERE id=?", did);
+        if (initial) db.audit(u.id, "admin-device-sign-in", did);
+      }
+      if (!d.approved && u.role === "admin") {
+        const lastDecision = db.get(
+          "SELECT action FROM audit WHERE target=? AND action IN ('approve-device','revoke-device') ORDER BY id DESC LIMIT 1",
+          d.id,
+        );
+        // Migrate pending admin devices without undoing an explicit revocation.
+        if (lastDecision?.action !== "revoke-device") {
+          db.run("UPDATE devices SET approved=1 WHERE id=?", d.id);
+          db.audit(u.id, "admin-device-sign-in", d.id);
+          d.approved = 1;
+        }
       }
       if (!d.approved) return { deviceId: d.id, pending: true };
       const access = token();
@@ -432,7 +443,7 @@ export async function buildApp(
     const a = auth(req);
     return db
       .all(
-        "SELECT c.* FROM conversations c JOIN members m ON m.conversation_id=c.id WHERE m.user_id=? ORDER BY c.kind,c.name",
+        "SELECT c.* FROM conversations c JOIN members m ON m.conversation_id=c.id WHERE m.user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=c.id) ORDER BY c.kind,c.name",
         a.id,
       )
       .map((c) => ({
@@ -1058,6 +1069,8 @@ export async function buildApp(
         .all("SELECT * FROM conversations WHERE kind!='private'")
         .map((c) => ({
           ...c,
+          archived: !!db.get("SELECT 1 FROM archived_channels WHERE conversation_id=?", c.id),
+          teamId: db.get("SELECT team_id FROM operational_teams WHERE channel_id=?", c.id)?.team_id || null,
           memberIds: db
             .all("SELECT user_id FROM members WHERE conversation_id=?", c.id)
             .map((x) => x.user_id),
@@ -1114,11 +1127,11 @@ export async function buildApp(
         b.approved ? 1 : 0,
         did,
       );
+      db.audit(a.id, b.approved ? "approve-device" : "revoke-device", did);
       if (!b.approved) {
         db.run("DELETE FROM sessions WHERE device_id=?", did);
         await disconnectDevice(did);
       }
-      db.audit(a.id, b.approved ? "approve-device" : "revoke-device", did);
       return { ok: true };
     }),
   );
@@ -1142,6 +1155,8 @@ export async function buildApp(
         c = db.get("SELECT * FROM conversations WHERE id=?", cid);
       if (!c || c.kind !== "channel")
         fail(400, "Only channel memberships can be edited");
+      if (db.get("SELECT 1 FROM archived_channels WHERE conversation_id=?", cid))
+        fail(409, "Restore this channel before editing memberships");
       if (db.get("SELECT 1 FROM operational_teams WHERE channel_id=?", cid))
         fail(409, "Use operational assignments for this team");
       for (const uid of b.memberIds)
@@ -1215,7 +1230,7 @@ export async function buildApp(
       name: a.name,
       // Live rights are distinct from private text/call membership. Sign room
       // epochs and session expiry so peers cannot invent or extend live access.
-      liveConversations: db.all("SELECT c.* FROM conversations c JOIN members m ON m.conversation_id=c.id WHERE m.user_id=?", a.id)
+      liveConversations: db.all("SELECT c.* FROM conversations c JOIN members m ON m.conversation_id=c.id WHERE m.user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=c.id)", a.id)
         .filter(c => phase.permittedMedia(a, c))
         .map(c => {
           const broadcast = db.get("SELECT expires_at FROM broadcast_sessions WHERE conversation_id=?", c.id);
@@ -1231,13 +1246,13 @@ export async function buildApp(
         }),
       publishConversations: db
         .all(
-          "SELECT m.conversation_id FROM members m JOIN conversations c ON c.id=m.conversation_id WHERE m.user_id=? AND (c.kind!='broadcast' OR ?='admin')",
+          "SELECT m.conversation_id FROM members m JOIN conversations c ON c.id=m.conversation_id WHERE m.user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=c.id) AND (c.kind!='broadcast' OR ?='admin')",
           a.id,
           a.role,
         )
         .map((c) => c.conversation_id),
       conversations: db
-        .all("SELECT conversation_id FROM members WHERE user_id=?", a.id)
+        .all("SELECT m.conversation_id FROM members m WHERE m.user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=m.conversation_id)", a.id)
         .map((c) => c.conversation_id),
       expiresAt: Date.now() + 8 * 3600_000,
     };

@@ -40,6 +40,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS phase_files(id TEXT PRIMARY KEY,scope TEXT NOT NULL CHECK(scope IN ('floor','issue')),scope_id TEXT NOT NULL,uploader_id TEXT NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS admin_exchanges(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL,volunteer_id TEXT NOT NULL,admin_id TEXT NOT NULL,admin_device TEXT NOT NULL,expires_at INTEGER NOT NULL,state TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS broadcast_sessions(conversation_id TEXT PRIMARY KEY,creator_id TEXT NOT NULL,team_ids TEXT NOT NULL,state TEXT NOT NULL,expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS archived_channels(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),archived_at INTEGER NOT NULL,actor_id TEXT NOT NULL REFERENCES users(id));
       CREATE INDEX IF NOT EXISTS issues_activity ON issues(updated_at);
       CREATE INDEX IF NOT EXISTS issue_replies_thread ON issue_replies(issue_id,seq);
       INSERT OR IGNORE INTO schema_migrations VALUES(2,strftime('%s','now')*1000);

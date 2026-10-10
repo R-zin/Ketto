@@ -457,10 +457,25 @@ textarea {
   background: #fff;
   font-size: 13px;
 }
-.channel-volunteers h2 { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
-.channel-assignment-note { color: #69756c; font-size: 12px; margin-bottom: 14px; }
-.channel-volunteers .assignment-row > span { display: flex; align-items: center; gap: 9px; }
-.channel-volunteers .assignment-row small { color: #69756c; font-size: 12px; }
+.channel-volunteers h2 {
+  font-size: 16px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.channel-assignment-note {
+  color: #69756c;
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+.channel-volunteers .assignment-row > span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.channel-volunteers .assignment-row small {
+  color: #69756c;
+  font-size: 12px;
+}
 .admin-panel,
 .map-panel,
 .zone-details {
@@ -511,6 +526,42 @@ textarea {
 .map-layout {
   grid-template-columns: minmax(0, 2.4fr) minmax(210px, 1fr);
   gap: 16px;
+}
+.venue-example-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.example-map-label {
+  font-size: 13px;
+  color: #526756;
+}
+.zone-marker.is-selected {
+  color: #fff;
+  background: #2f6040;
+  border-color: #2f6040;
+}
+.zone-marker.is-selected small {
+  color: #eff6e9;
+}
+.floor-removal {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #dce2d9;
+}
+.floor-removal small {
+  color: #69756c;
+  font-size: 12px;
+}
+.outline.danger-button {
+  color: #9b3b30;
+  border-color: #d8aaa3;
 }
 .map-toolbar {
   align-items: center;

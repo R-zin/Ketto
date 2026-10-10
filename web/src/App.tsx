@@ -1,9 +1,10 @@
-import { Fragment, useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Radio,
   Mic,
   MessageSquare,
   Users,
+  Settings,
   LogOut,
   ArrowRight,
   Lock,
@@ -32,11 +33,10 @@ import {
 import { Coordinator } from "./media";
 import Operations, {
   useOperations,
-  CommunicationPanel,
   LocationControl,
+  CommunicationPanel,
 } from "./Operations";
 import "./operations.css";
-import Organisation from "./Organisation";
 
 const time = (n: number) =>
   new Date(n).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -143,7 +143,7 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
       <main>
         <div className="intro">
           <Radio size={35} />
-          <h1>KETTO</h1>
+          <h1>Kettoo</h1>
           <span className="light-badge">CLIENT 0.3</span>
         </div>
         <p className="subtitle">
@@ -198,7 +198,10 @@ function Login({ onLogin }: { onLogin: (u: any) => void }) {
             />
           </label>
           <div className="small muted">
-            <Lock size={15} /> Membership and device approval are required.
+            <Lock size={15} />
+            {register
+              ? "Volunteer accounts and devices require admin approval."
+              : "Admins sign in directly. Volunteer accounts and devices require approval."}
           </div>
           {note && (
             <div className="notice" role="status">
@@ -240,6 +243,7 @@ export default function App() {
   const [user, setUser] = useState<any>(),
     [loading, setLoading] = useState(!!access),
     [page, setPage] = useState("comms"),
+    [tab, setTab] = useState("voice"),
     [conversations, setConversations] = useState<any[]>([]),
     [selected, setSelected] = useState(""),
     [people, setPeople] = useState<any[]>([]),
@@ -257,7 +261,11 @@ export default function App() {
     [incoming, setIncoming] = useState<any>(),
     [recording, setRecording] = useState(false),
     [conserve, setConserve] = useState(false),
-    [broadcastOpen, setBroadcastOpen] = useState(false);
+    [newName, setNewName] = useState("");
+  const [channelBusy, setChannelBusy] = useState("");
+  const [editingChannel, setEditingChannel] = useState(""),
+    [channelName, setChannelName] = useState("");
+  const [audience, setAudience] = useState<any[]>([]);
   const [archived, setArchived] = useState(false);
   const isArchived = (m: any) =>
     m.receipts?.some(
@@ -272,41 +280,8 @@ export default function App() {
     recorder = useRef<MediaRecorder | undefined>(undefined),
     noteStream = useRef<MediaStream | undefined>(undefined),
     fileInput = useRef<HTMLInputElement>(null);
-  const messageLog = useRef<HTMLDivElement>(null),
-    followMessages = useRef(true);
-  useEffect(() => {
-    followMessages.current = true;
-  }, [selected]);
-  useEffect(() => {
-    if (messageLog.current && !archived && followMessages.current)
-      messageLog.current.scrollTop = messageLog.current.scrollHeight;
-  }, [messages.length, selected, page, archived]);
   session.current = { duty, selected, user };
   const current = conversations.find((c) => c.id === selected);
-  const displayedConversations = conversations
-    .filter(
-      (c) =>
-        c.kind !== "broadcast" ||
-        c.id === "all-staff" ||
-        c.mediaAllowed !== false ||
-        c.id === selected,
-    )
-    .sort(
-      (a, b) =>
-        ({ channel: 0, broadcast: 1, private: 2 })[
-          a.kind as "channel" | "broadcast" | "private"
-        ] -
-        { channel: 0, broadcast: 1, private: 2 }[
-          b.kind as "channel" | "broadcast" | "private"
-        ],
-    );
-  const channelTitle = (c: any) =>
-    c.kind === "private"
-      ? c.members
-          .filter((m: any) => m.id !== user?.id)
-          .map((m: any) => m.name)
-          .join(", ") || c.name
-      : c.name;
   const operations = useOperations(
     user,
     online &&
@@ -381,6 +356,7 @@ export default function App() {
   useEffect(() => {
     coordinator.onState = setState;
     coordinator.onError = report;
+    coordinator.onAudience = setAudience;
     coordinator.onRecording = async (cid, id, blob) => {
       const owner = session.current.user?.id;
       if (!owner) return;
@@ -664,10 +640,16 @@ export default function App() {
   async function action(path: string, body: any = {}, method?: string) {
     try {
       await api(path, body, method);
-      await refresh();
+    } catch (e) {
+      report(e);
+      return false;
+    }
+    try {
+      await Promise.all([refresh(), operations.refresh()]);
     } catch (e) {
       report(e);
     }
+    return true;
   }
   async function acknowledge(m: any) {
     try {
@@ -718,36 +700,29 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <Mark />
-        <span className="workspace-label">
-          {user.role === "admin" ? "Admin workspace" : "Staff workspace"}
-        </span>
-        <button
-          className={"duty-control " + (duty ? "on-duty" : "")}
-          aria-pressed={duty}
-          onClick={() => setDuty(!duty)}
-          title={duty ? "End duty" : "Start duty"}
-        >
-          <span className={"dot " + (!duty ? "hollow" : "")} />
+        <div className="top-status mono">
+          <span className={"dot " + (!online ? "hollow" : "")} />
+          {online ? "SERVER CONNECTED" : "SERVER UNREACHABLE"} //{" "}
           {duty ? "ON DUTY" : "OFF DUTY"}
-        </button>
+          <LocationControl ops={operations} />
+        </div>
         <button
           className="avatar"
-          title={user.name + " · Account settings"}
-          aria-label={user.name + " · Account settings"}
+          title="Settings"
           onClick={() => setPage("settings")}
         >
-          {user.name
-            .trim()
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part: string) => part[0])
-            .join("")
-            .toUpperCase()}
+          {user.name.slice(0, 2).toUpperCase()}
         </button>
       </header>
       <div className="shell">
         <aside>
-          <nav aria-label="Main navigation">
+          <div className="eyebrow">PRIMARY DISPATCH</div>
+          <h2>
+            Communication
+            <br />
+            without the noise.
+          </h2>
+          <nav>
             {user.role === "admin" && (
               <button
                 className={page === "map" ? "active" : ""}
@@ -771,38 +746,58 @@ export default function App() {
               <Radio />
               Communications
             </button>
-            {user.role === "admin" ? (
-              <>
-                <span className="nav-section">Administration</span>
-                <button
-                  className={page === "admin" ? "active" : ""}
-                  onClick={() => setPage("admin")}
-                >
-                  <Users />
-                  Organisation
-                </button>
-              </>
-            ) : (
+            <button
+              className={page === "people" ? "active" : ""}
+              onClick={() => setPage("people")}
+            >
+              <Users />
+              People
+            </button>
+            {user.role === "admin" && (
               <button
-                className={page === "people" ? "active" : ""}
-                onClick={() => setPage("people")}
+                className={page === "admin" ? "active" : ""}
+                onClick={() => setPage("admin")}
               >
-                <Users />
-                People
+                <Activity />
+                Organisation
               </button>
             )}
+            <button
+              className={page === "settings" ? "active" : ""}
+              onClick={() => setPage("settings")}
+            >
+              <Settings />
+              Settings
+            </button>
           </nav>
           <div className="side-footer">
-            <span>{user.name}</span>
+            <span className="eyebrow">OPERATOR</span>
+            <strong>{user.name}</strong>
+            <span className="mono">
+              {user.role.toUpperCase()} // {rooms.length} AUDIO ROOMS
+            </span>
+            <button
+              className={duty ? "outline" : "primary"}
+              onClick={() => setDuty(!duty)}
+            >
+              {duty ? <Square size={14} /> : <Radio size={16} />}{" "}
+              {duty ? "END DUTY" : "START DUTY"}
+            </button>
           </div>
         </aside>
         <main className="workspace">
+          <CommunicationPanel
+            ops={operations}
+            user={user}
+            onConversation={openCommunication}
+          />
           {(page === "map" || page === "threads") && (
             <Operations
               ops={operations}
               user={user}
               page={page}
               onConversation={openCommunication}
+              onManageChannels={() => setPage("admin")}
             />
           )}
           {error && (
@@ -831,79 +826,50 @@ export default function App() {
           {page === "comms" && (
             <>
               <div className="page-title">
-                <h1>Communications</h1>
-                {user.role === "admin" && (
-                  <button
-                    className="outline"
-                    aria-expanded={broadcastOpen}
-                    onClick={() => setBroadcastOpen(!broadcastOpen)}
-                  >
-                    <Radio size={16} />
-                    Broadcast
-                  </button>
-                )}
-              </div>
-              {(user.role !== "admin" ||
-                broadcastOpen ||
-                operations.data?.exchange) && (
-                <CommunicationPanel
-                  ops={operations}
-                  user={user}
-                  onConversation={openCommunication}
-                  onPrepared={() => setBroadcastOpen(false)}
-                />
-              )}
-              {operations.error && (
-                <div className="notice error" role="alert">
-                  {operations.error}
-                  <button
-                    aria-label="Dismiss broadcast error"
-                    onClick={() => operations.setError("")}
-                  >
-                    ×
-                  </button>
+                <div>
+                  <span className="eyebrow">OPERATIONS / COMMUNICATIONS</span>
+                  <h1>Stay connected.</h1>
                 </div>
-              )}
+                <span className="outline-badge">
+                  {conversations.length} CONVERSATIONS
+                </span>
+              </div>
               <div className="comms-grid">
                 <section className="conversation-list">
-                  <div className="section-title">Channels</div>
-                  {displayedConversations.map((c, index) => (
-                    <Fragment key={c.id}>
-                      {c.kind === "private" &&
-                        displayedConversations[index - 1]?.kind !==
-                          "private" && (
-                          <div className="section-title direct-heading">
-                            Direct
-                          </div>
+                  <div className="section-title">
+                    YOUR CHANNELS{" "}
+                    <span>
+                      {conversations.length.toString().padStart(2, "0")}
+                    </span>
+                  </div>
+                  {conversations.map((c) => (
+                    <button
+                      key={c.id}
+                      className={
+                        "conversation " + (c.id === selected ? "selected" : "")
+                      }
+                      onClick={() => setSelected(c.id)}
+                    >
+                      <span className="channel-icon">
+                        {c.kind === "private" ? (
+                          <Lock size={18} />
+                        ) : (
+                          <Radio size={18} />
                         )}
-                      <button
-                        key={c.id}
-                        className={
-                          "conversation " +
-                          (c.id === selected ? "selected" : "")
-                        }
-                        onClick={() => setSelected(c.id)}
-                      >
-                        <span className="channel-icon">
-                          {c.kind === "private" ? (
-                            <Lock size={18} />
-                          ) : (
-                            <Radio size={18} />
-                          )}
-                        </span>
-                        <span>
-                          <b>{channelTitle(c)}</b>
-                          <small>
-                            {c.kind === "broadcast"
-                              ? "Broadcast"
-                              : c.kind === "private"
-                                ? "Private conversation"
-                                : `${c.members.length} members`}{" "}
-                          </small>
-                        </span>
-                        {c.speaker && <span className="dot" />}
-                      </button>
-                    </Fragment>
+                      </span>
+                      <span>
+                        <b>{c.name}</b>
+                        <small>
+                          {c.kind === "broadcast"
+                            ? "ADMIN BROADCAST"
+                            : c.kind === "private"
+                              ? "PRIVATE / TWO PEOPLE"
+                              : `${c.members.length} MEMBERS`}{" "}
+                          · {c.listeners} READY
+                        </small>
+                      </span>
+                      {c.speaker && <span className="dot" />}
+                    </button>
                   ))}
                   {!conversations.length && (
                     <p className="empty">
@@ -912,27 +878,40 @@ export default function App() {
                   )}
                   <button
                     className="link-button"
-                    onClick={() =>
-                      setPage(user.role === "admin" ? "admin" : "people")
-                    }
+                    onClick={() => setPage("people")}
                   >
                     <Plus size={16} />
                     Open private conversation
                   </button>
+                  <div className="network-note">
+                    <b>LOCAL NETWORK FIRST</b>
+                    <p>
+                      Internet is optional when your organisation’s server and
+                      media service are reachable.
+                    </p>
+                  </div>
                 </section>
                 <section className="communication">
                   {current && (
                     <>
                       <div className="person-panel">
+                        <span className="initials">
+                          {current.kind === "private" ? (
+                            <Lock size={27} />
+                          ) : (
+                            <Radio size={27} />
+                          )}
+                        </span>
                         <div>
-                          <h2>{channelTitle(current)}</h2>
-                          <span className="conversation-type">
+                          <h2>{current.name}</h2>
+                          <span className="eyebrow">
                             {current.kind === "private"
-                              ? "Private conversation"
+                              ? "DIRECT / PRIVATE COMMS"
                               : current.kind === "broadcast"
-                                ? "Broadcast"
-                                : "Team channel"}{" "}
-                            · {current.members.length} members
+                                ? current.id === "all-staff"
+                                  ? "ORGANISATION / ALL STAFF"
+                                  : "BROADCAST / SELECTED AUDIENCE"
+                                : "TEAM / CHANNEL COMMS"}
                           </span>
                         </div>
                         <div className="call-actions">
@@ -968,98 +947,181 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      <div className="voice-view">
-                        <div className="voice-status">
-                          <strong>
-                            {!online
-                              ? "Server unavailable"
-                              : rooms.includes(selected)
-                                ? "Voice connected"
-                                : duty
-                                  ? current.mediaAllowed === false
-                                    ? "Voice unavailable"
-                                    : "Connecting voice…"
-                                  : "Voice off"}
-                          </strong>
-                          <span>
-                            {state === "TRANSMITTING"
-                              ? "Transmitting · Release to finish"
-                              : state === "REQUESTING"
-                                ? "Requesting microphone…"
-                                : recording
-                                  ? "Recording voice note"
-                                  : call?.state === "accepted"
-                                    ? "In a private call"
-                                    : !duty
-                                      ? "Go on duty to use live voice"
-                                      : current.pttAllowed === false
-                                        ? "Listening only"
-                                        : "Hold to speak · Release to finish"}
-                          </span>
-                        </div>
+                      <div className="meta-row">
+                        <span>
+                          <Lock size={13} />{" "}
+                          {current.kind === "private"
+                            ? "PERMITTED PAIR"
+                            : "MEMBERS ONLY"}
+                        </span>
+                        <span>
+                          {rooms.includes(selected)
+                            ? "AUDIO CONNECTED"
+                            : "AUDIO DISCONNECTED"}
+                        </span>
+                      </div>
+                      <div className="tabs">
                         <button
-                          className={
-                            "talk " +
-                            (state === "TRANSMITTING" ? "talking" : "")
-                          }
-                          disabled={
-                            !online ||
-                            current.pttAllowed === false ||
-                            !duty ||
-                            !rooms.includes(selected) ||
-                            recording ||
-                            call?.state === "accepted" ||
-                            (current.kind === "broadcast" &&
-                              user.role !== "admin")
-                          }
-                          onPointerDown={(e) => {
-                            e.currentTarget.setPointerCapture(e.pointerId);
-                            void coordinator.start(selected);
-                          }}
-                          onPointerUp={() => void coordinator.stop()}
-                          onPointerCancel={() => void coordinator.stop()}
-                          onKeyDown={(e) => {
-                            if (
-                              (e.key === " " || e.key === "Enter") &&
-                              !e.repeat
-                            ) {
-                              e.preventDefault();
-                              void coordinator.start(selected);
-                            }
-                          }}
-                          onKeyUp={(e) => {
-                            if (e.key === " " || e.key === "Enter") {
-                              e.preventDefault();
-                              void coordinator.stop();
-                            }
-                          }}
+                          className={tab === "voice" ? "active" : ""}
+                          onClick={() => setTab("voice")}
                         >
-                          <Mic size={18} />
-                          <strong>
-                            {state === "TRANSMITTING"
-                              ? "Transmitting"
-                              : "Hold to talk"}
-                          </strong>
+                          <Mic size={17} />
+                          LIVE VOICE (PTT)
+                        </button>
+                        <button
+                          className={tab === "chat" ? "active" : ""}
+                          onClick={() => setTab("chat")}
+                        >
+                          <MessageSquare size={17} />
+                          MESSAGE LOG
                         </button>
                       </div>
-                      <div
-                        className="message-log"
-                        ref={messageLog}
-                        onScroll={(e) => {
-                          const log = e.currentTarget;
-                          followMessages.current =
-                            log.scrollHeight -
-                              log.scrollTop -
-                              log.clientHeight <
-                            120;
-                        }}
-                      >
+                      {tab === "voice" && (
+                        <div className="voice-view">
+                          <div className="session-panel">
+                            {audience.length > 0 && (
+                              <p className="mono">
+                                At burst start:{" "}
+                                {
+                                  audience.filter(
+                                    (a) => a.state === "media-connected",
+                                  ).length
+                                }{" "}
+                                audio connected ·{" "}
+                                {
+                                  audience.filter((a) => a.state === "busy")
+                                    .length
+                                }{" "}
+                                busy ·{" "}
+                                {
+                                  audience.filter((a) =>
+                                    ["offline", "unavailable"].includes(
+                                      a.state,
+                                    ),
+                                  ).length
+                                }{" "}
+                                unavailable. This does not confirm anyone heard
+                                it.
+                              </p>
+                            )}
+                            <div className="section-title">
+                              <span>
+                                <span className="dot" />
+                                {current.kind === "private"
+                                  ? "PRIVATE"
+                                  : "CHANNEL"}{" "}
+                                VOICE SESSION
+                              </span>
+                              <span className="badge">
+                                {current.kind === "private"
+                                  ? "ISOLATED 1-ON-1"
+                                  : "ONE SPEAKER"}
+                              </span>
+                            </div>
+                            <div className="wave-panel">
+                              <div className="mono">
+                                {!online
+                                  ? "DISCONNECTED"
+                                  : state === "STANDBY" &&
+                                      incoming?.conversation === selected
+                                    ? "LISTENING"
+                                    : state}{" "}
+                                //{" "}
+                                {rooms.includes(selected)
+                                  ? "READY"
+                                  : "NOT READY"}
+                              </div>
+                              <div
+                                className={
+                                  "wave " +
+                                  (state === "TRANSMITTING" ? "moving" : "")
+                                }
+                              >
+                                {Array.from({ length: 32 }, (_, i) => (
+                                  <i
+                                    key={i}
+                                    style={{
+                                      height: 5 + ((i * 17) % 26),
+                                      animationDelay: `${i * 0.06}s`,
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                              <p>
+                                {current.kind === "private"
+                                  ? "Live audio is restricted to the two members of this conversation."
+                                  : "Hold to request the channel. Speak only after TRANSMITTING appears."}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            className={
+                              "talk " +
+                              (state === "TRANSMITTING" ? "talking" : "")
+                            }
+                            disabled={
+                              !online ||
+                              current.pttAllowed === false ||
+                              !duty ||
+                              !rooms.includes(selected) ||
+                              recording ||
+                              call?.state === "accepted" ||
+                              (current.kind === "broadcast" &&
+                                user.role !== "admin")
+                            }
+                            onPointerDown={(e) => {
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                              void coordinator.start(selected);
+                            }}
+                            onPointerUp={() => void coordinator.stop()}
+                            onPointerCancel={() => void coordinator.stop()}
+                            onKeyDown={(e) => {
+                              if (
+                                (e.key === " " || e.key === "Enter") &&
+                                !e.repeat
+                              ) {
+                                e.preventDefault();
+                                void coordinator.start(selected);
+                              }
+                            }}
+                            onKeyUp={(e) => {
+                              if (e.key === " " || e.key === "Enter") {
+                                e.preventDefault();
+                                void coordinator.stop();
+                              }
+                            }}
+                          >
+                            <Mic size={46} />
+                            <strong>
+                              {state === "TRANSMITTING" ? "LIVE" : "TALK"}
+                            </strong>
+                            <span>
+                              {state === "REQUESTING"
+                                ? "REQUESTING SLOT"
+                                : "HOLD TO TRANSMIT"}
+                            </span>
+                          </button>
+                          <div className="voice-caption">
+                            <Lock size={15} /> 30-SECOND LIMIT · RELEASE TO
+                            FINISH
+                          </div>
+                          {!duty && (
+                            <button
+                              className="primary wide"
+                              onClick={() => setDuty(true)}
+                            >
+                              START ON-DUTY SESSION <ArrowRight size={17} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <div className="message-log">
                         <div className="log-folders">
                           <button
                             className={!archived ? "primary" : ""}
                             onClick={() => setArchived(false)}
                           >
-                            Messages
+                            Log
                           </button>
                           <button
                             className={archived ? "primary" : ""}
@@ -1068,101 +1130,110 @@ export default function App() {
                             Archived ({messages.filter(isArchived).length})
                           </button>
                         </div>
+                        <div className="section-title">
+                          {current.kind === "private" ? "DIRECT" : "CHANNEL"}{" "}
+                          {archived ? "ARCHIVED" : "COMM LOG"}{" "}
+                          <span>
+                            {archived ? "ONLY FOR YOU" : "SERVER HISTORY"}
+                          </span>
+                        </div>
                         {!visibleMessages.length && (
                           <p className="empty">
                             {archived
                               ? "Acknowledged messages appear here."
-                              : "No new messages."}
+                              : "No unacknowledged messages."}
                           </p>
                         )}
-                        {visibleMessages.map((m) => (
-                          <article
-                            className={
-                              "message " +
-                              (m.sender_id === user.id ? "mine" : "")
-                            }
-                            key={m.id}
-                          >
-                            <div className="message-meta">
-                              <b>
-                                {m.sender_id === user.id
-                                  ? "YOU"
-                                  : m.sender_name}
-                              </b>
-                              <time>{time(m.received_at)}</time>
-                            </div>
-                            {m.text && <p>{m.text}</p>}
-                            {m.kind === "ptt" && (
-                              <p>
-                                <Mic size={14} />{" "}
-                                {m.status === "live"
-                                  ? "Live voice transmission"
-                                  : m.status.includes("interrupted")
-                                    ? "Interrupted live transmission"
-                                    : "Push-to-talk burst"}
-                                {!m.attachment_id && m.status !== "live"
-                                  ? " · Recording unavailable"
-                                  : ""}
-                              </p>
-                            )}
-                            {m.attachment_id && <Attachment message={m} />}
-                            {["ptt", "voice"].includes(m.kind) && (
-                              <div className="transcript">
-                                <span className="mono">
-                                  TRANSCRIPT / AUTOMATIC
-                                </span>
-                                <p>
-                                  {m.transcript?.text ||
-                                    (m.status === "live"
-                                      ? "Transcript appears after the live burst."
-                                      : ["pending", "processing"].includes(
-                                            m.transcript?.state,
-                                          )
-                                        ? "Transcribing…"
-                                        : m.transcript?.error ||
-                                          "Transcript unavailable. Listen to the audio.")}
-                                </p>
-                                {online &&
-                                  m.attachment_id &&
-                                  (!m.transcript ||
-                                    ["failed", "unavailable"].includes(
-                                      m.transcript.state,
-                                    )) && (
-                                    <button
-                                      onClick={() =>
-                                        void action(
-                                          `/messages/${m.id}/transcript/retry`,
-                                        )
-                                      }
-                                    >
-                                      Retry transcript
-                                    </button>
-                                  )}
+                        {visibleMessages
+                          .slice(tab === "voice" && !archived ? -4 : 0)
+                          .map((m) => (
+                            <article
+                              className={
+                                "message " +
+                                (m.sender_id === user.id ? "mine" : "")
+                              }
+                              key={m.id}
+                            >
+                              <div className="message-meta">
+                                <b>
+                                  {m.sender_id === user.id
+                                    ? "YOU"
+                                    : m.sender_name}
+                                </b>
+                                <time>{time(m.received_at)}</time>
                               </div>
-                            )}
-                            <div className="message-status">
-                              {m.delayed ? "DELAYED · " : ""}
-                              {m.receipts.some(
-                                (r: any) => r.state === "acknowledged",
-                              )
-                                ? "ACKNOWLEDGED"
-                                : m.receipts.some(
-                                      (r: any) => r.user_id !== m.sender_id,
-                                    )
-                                  ? "RECIPIENT RECEIVED"
-                                  : "SERVER RECEIVED"}
-                              {!archived && (
-                                <button
-                                  disabled={!online}
-                                  onClick={() => void acknowledge(m)}
-                                >
-                                  <Check size={12} />
-                                  Acknowledge & archive
-                                </button>
+                              {m.text && <p>{m.text}</p>}
+                              {m.kind === "ptt" && (
+                                <p>
+                                  <Mic size={14} />{" "}
+                                  {m.status === "live"
+                                    ? "Live voice transmission"
+                                    : m.status.includes("interrupted")
+                                      ? "Interrupted live transmission"
+                                      : "Push-to-talk burst"}
+                                  {!m.attachment_id && m.status !== "live"
+                                    ? " · Recording unavailable"
+                                    : ""}
+                                </p>
                               )}
-                            </div>
-                          </article>
-                        ))}
+                              {m.attachment_id && <Attachment message={m} />}
+                              {["ptt", "voice"].includes(m.kind) && (
+                                <div className="transcript">
+                                  <span className="mono">
+                                    TRANSCRIPT / AUTOMATIC
+                                  </span>
+                                  <p>
+                                    {m.transcript?.text ||
+                                      (m.status === "live"
+                                        ? "Transcript appears after the live burst."
+                                        : ["pending", "processing"].includes(
+                                              m.transcript?.state,
+                                            )
+                                          ? "Transcribing…"
+                                          : m.transcript?.error ||
+                                            "Transcript unavailable. Listen to the audio.")}
+                                  </p>
+                                  {online &&
+                                    m.attachment_id &&
+                                    (!m.transcript ||
+                                      ["failed", "unavailable"].includes(
+                                        m.transcript.state,
+                                      )) && (
+                                      <button
+                                        onClick={() =>
+                                          void action(
+                                            `/messages/${m.id}/transcript/retry`,
+                                          )
+                                        }
+                                      >
+                                        Retry transcript
+                                      </button>
+                                    )}
+                                </div>
+                              )}
+                              <div className="message-status">
+                                {m.delayed ? "DELAYED · " : ""}
+                                {m.receipts.some(
+                                  (r: any) => r.state === "acknowledged",
+                                )
+                                  ? "ACKNOWLEDGED"
+                                  : m.receipts.some(
+                                        (r: any) => r.user_id !== m.sender_id,
+                                      )
+                                    ? "RECIPIENT RECEIVED"
+                                    : "SERVER RECEIVED"}
+                                {!archived && (
+                                  <button
+                                    disabled={!online}
+                                    onClick={() => void acknowledge(m)}
+                                  >
+                                    <Check size={12} />
+                                    Acknowledge & archive
+                                  </button>
+                                )}
+                              </div>
+                            </article>
+                          ))}
                         {pending
                           .filter(
                             (p) =>
@@ -1222,9 +1293,7 @@ export default function App() {
                               aria-label="Message"
                               value={text}
                               onChange={(e) => setText(e.target.value)}
-                              placeholder={
-                                "Message " + channelTitle(current) + "…"
-                              }
+                              placeholder="Write to your team…"
                               maxLength={4000}
                             />
                             <button
@@ -1294,22 +1363,368 @@ export default function App() {
               )}
             </>
           )}
-          {page === "admin" && (
-            <Organisation
-              overview={overview}
-              user={user}
-              ops={operations}
-              refresh={refresh}
-              onConversation={openCommunication}
-              onPrivate={(id) => void privateChat(id)}
-              report={report}
-            />
+          {page === "admin" && overview && (
+            <>
+              <div className="page-title">
+                <div>
+                  <span className="eyebrow">ORGANISATION / CONTROL ROOM</span>
+                  <h1>Dispatch overview.</h1>
+                </div>
+                <button className="outline" onClick={() => void refresh()}>
+                  <RefreshCw size={15} />
+                  Refresh
+                </button>
+                <button
+                  className="outline"
+                  disabled={!online}
+                  onClick={() =>
+                    void action(
+                      "/admin/duty-admin",
+                      { userId: user.id, deviceId: user.device },
+                      "PUT",
+                    )
+                  }
+                >
+                  Use this browser as duty admin
+                </button>
+              </div>
+              <div className="stats">
+                {[
+                  [
+                    "APPROVED MEMBERS",
+                    overview.users.filter((u: any) => u.approved).length,
+                  ],
+                  [
+                    "CONNECTED DEVICES",
+                    overview.users
+                      .flatMap((u: any) => u.devices)
+                      .filter((d: any) => d.online).length,
+                  ],
+                  [
+                    "ON DUTY",
+                    overview.users
+                      .flatMap((u: any) => u.devices)
+                      .filter((d: any) => d.online && d.onDuty).length,
+                  ],
+                  [
+                    "ACTIVE SPEAKERS",
+                    overview.channels.filter((c: any) => c.speaker).length,
+                  ],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <span className="eyebrow">{label}</span>
+                    <strong>{value}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="broadcast-card">
+                <Radio />
+                <div>
+                  <h3>ALL STAFF BROADCAST</h3>
+                  <p>Text and live voice for every approved member.</p>
+                </div>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setSelected("all-staff");
+                    setPage("comms");
+                  }}
+                >
+                  OPEN CHANNEL <ArrowRight size={16} />
+                </button>
+              </div>
+              <section className="admin-panel">
+                <div className="section-title">MEMBER & DEVICE APPROVAL</div>
+                {overview.users.map((u: any) => (
+                  <div className="member-row" key={u.id}>
+                    <div>
+                      <strong>{u.name}</strong>
+                      <small>
+                        {u.email} · {u.role}
+                      </small>
+                    </div>
+                    <span className={u.approved ? "light-badge" : "badge"}>
+                      {u.approved ? "APPROVED" : "PENDING"}
+                    </span>
+                    {u.id !== user.id && (
+                      <button
+                        className="outline"
+                        onClick={() =>
+                          void action(`/admin/users/${u.id}/approval`, {
+                            approved: !u.approved,
+                          })
+                        }
+                      >
+                        {u.approved ? "Revoke" : "Approve member"}
+                      </button>
+                    )}
+                    <div className="devices">
+                      {u.devices.map((d: any) => (
+                        <div key={d.id}>
+                          <span
+                            className={"dot " + (!d.online ? "hollow" : "")}
+                          />
+                          <span>
+                            {d.name}{" "}
+                            <small>
+                              {d.online ? "ONLINE" : "OFFLINE"} ·{" "}
+                              {d.onDuty ? "ON DUTY" : "OFF DUTY"} ·{" "}
+                              {d.rooms.length} AUDIO ROOMS{" "}
+                              {d.busy ? "· IN CALL" : ""}
+                              {!d.online && d.lastSeen
+                                ? ` · LAST SEEN ${new Date(d.lastSeen).toLocaleString()}`
+                                : ""}
+                            </small>
+                          </span>
+                          {d.id !== user.device && (
+                            <button
+                              onClick={() =>
+                                void action(`/admin/devices/${d.id}/approval`, {
+                                  approved: !d.approved,
+                                })
+                              }
+                            >
+                              {d.approved ? "Revoke device" : "Approve device"}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </section>
+              <section className="admin-panel">
+                <div className="section-title">CHANNELS & MEMBERSHIPS</div>
+                <form
+                  className="inline-form"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (channelBusy) return;
+                    setChannelBusy("create");
+                    try {
+                      if (
+                        await action("/admin/operational-teams", {
+                          name: newName,
+                        })
+                      )
+                        setNewName("");
+                    } finally {
+                      setChannelBusy("");
+                    }
+                  }}
+                >
+                  <input
+                    required
+                    minLength={2}
+                    maxLength={80}
+                    disabled={!!channelBusy}
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="New channel name"
+                  />
+                  <button
+                    className="primary"
+                    disabled={!online || !!channelBusy}
+                  >
+                    <Plus size={15} />
+                    {channelBusy === "create" ? "CREATING…" : "CREATE CHANNEL"}
+                  </button>
+                </form>
+                {overview.channels
+                  .filter((c: any) => !c.archived)
+                  .map((c: any) => (
+                    <div className="channel-admin" key={c.id}>
+                      <div>
+                        <h3>{c.name}</h3>
+                        <span className="mono">
+                          {c.listeners} MEDIA CONNECTED ·{" "}
+                          {c.speaker ? "SPEAKER ACTIVE" : "STANDBY"}
+                        </span>
+                      </div>
+                      {c.kind === "channel" && (
+                        <button
+                          className="outline"
+                          disabled={!online || !!channelBusy}
+                          onClick={() => {
+                            setEditingChannel(c.id);
+                            setChannelName(c.name);
+                          }}
+                        >
+                          Rename channel
+                        </button>
+                      )}
+                      {editingChannel === c.id && (
+                        <form
+                          className="inline-form channel-rename"
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            if (channelBusy) return;
+                            setChannelBusy("rename:" + c.id);
+                            try {
+                              if (
+                                await action(
+                                  `/admin/channels/${c.id}`,
+                                  { name: channelName },
+                                  "PUT",
+                                )
+                              )
+                                setEditingChannel("");
+                            } finally {
+                              setChannelBusy("");
+                            }
+                          }}
+                        >
+                          <input
+                            required
+                            minLength={2}
+                            maxLength={80}
+                            aria-label="Channel name"
+                            disabled={!!channelBusy}
+                            value={channelName}
+                            onChange={(e) => setChannelName(e.target.value)}
+                          />
+                          <button
+                            className="primary"
+                            disabled={!online || !!channelBusy}
+                          >
+                            {channelBusy === "rename:" + c.id
+                              ? "Saving…"
+                              : "Save channel name"}
+                          </button>
+                          <button
+                            type="button"
+                            className="outline"
+                            disabled={!!channelBusy}
+                            onClick={() => setEditingChannel("")}
+                          >
+                            Cancel rename
+                          </button>
+                        </form>
+                      )}
+                      {c.kind === "channel" && (
+                        <button
+                          className="outline danger-button"
+                          disabled={!online || !!channelBusy}
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                `Delete “${c.name}” from active channels? Messages, issues and memberships are kept. You can restore it under Deleted channels.`,
+                              )
+                            )
+                              return;
+                            setChannelBusy("delete:" + c.id);
+                            try {
+                              await action(
+                                `/admin/channels/${c.id}`,
+                                undefined,
+                                "DELETE",
+                              );
+                            } finally {
+                              setChannelBusy("");
+                            }
+                          }}
+                        >
+                          {channelBusy === "delete:" + c.id
+                            ? "Deleting…"
+                            : "Delete channel"}
+                        </button>
+                      )}
+                      {c.kind === "channel" && (
+                        <div className="member-checks">
+                          {overview.users
+                            .filter((u: any) => u.approved)
+                            .map((u: any) => (
+                              <label key={u.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={c.memberIds.includes(u.id)}
+                                  disabled={
+                                    !online ||
+                                    !!channelBusy ||
+                                    (u.role === "admin" && !!c.teamId)
+                                  }
+                                  onChange={async (e) => {
+                                    if (channelBusy) return;
+                                    const assigned = e.target.checked;
+                                    setChannelBusy("members:" + c.id);
+                                    try {
+                                      if (c.teamId)
+                                        await action(
+                                          `/admin/operational-assignments/${u.id}`,
+                                          {
+                                            teamId: c.teamId,
+                                            assigned,
+                                          },
+                                          "PUT",
+                                        );
+                                      else
+                                        await action(
+                                          `/admin/channels/${c.id}/members`,
+                                          {
+                                            memberIds: assigned
+                                              ? [...c.memberIds, u.id]
+                                              : c.memberIds.filter(
+                                                  (id: string) => id !== u.id,
+                                                ),
+                                          },
+                                          "PUT",
+                                        );
+                                    } finally {
+                                      setChannelBusy("");
+                                    }
+                                  }}
+                                />
+                                {u.name}
+                              </label>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                {overview.channels.some((c: any) => c.archived) && (
+                  <details className="deleted-channels">
+                    <summary>
+                      Deleted channels (
+                      {overview.channels.filter((c: any) => c.archived).length})
+                    </summary>
+                    <p>
+                      History and memberships are kept. Restore a channel to
+                      make it available again.
+                    </p>
+                    {overview.channels
+                      .filter((c: any) => c.archived)
+                      .map((c: any) => (
+                        <div className="channel-admin" key={c.id}>
+                          <h3>{c.name}</h3>
+                          <button
+                            className="outline"
+                            disabled={!online || !!channelBusy}
+                            onClick={async () => {
+                              setChannelBusy("restore:" + c.id);
+                              try {
+                                await action(`/admin/channels/${c.id}/restore`);
+                              } finally {
+                                setChannelBusy("");
+                              }
+                            }}
+                          >
+                            {channelBusy === "restore:" + c.id
+                              ? "Restoring…"
+                              : "Restore channel"}
+                          </button>
+                        </div>
+                      ))}
+                  </details>
+                )}
+              </section>
+            </>
           )}
           {page === "settings" && (
             <>
               <div className="page-title">
                 <div>
-                  <h1>Account settings</h1>
+                  <span className="eyebrow">OPERATOR / SETTINGS</span>
+                  <h1>Your session.</h1>
                 </div>
               </div>
               <section className="admin-panel settings">
@@ -1320,23 +1735,32 @@ export default function App() {
                 <label>
                   <input
                     type="checkbox"
+                    checked={duty}
+                    onChange={(e) => setDuty(e.target.checked)}
+                  />
+                  On duty — connect permitted live-audio channels
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
                     checked={conserve}
                     onChange={(e) => setConserve(e.target.checked)}
                   />
                   Conserve data — disable video calls and video uploads
                 </label>
-                <LocationControl ops={operations} />
-                <details className="account-details">
-                  <summary>Connection details</summary>
-                  <div className="connection-panel">
-                    <b>Server</b>
-                    <span>{online ? "Connected" : "Unavailable"}</span>
-                    <b>Live voice channels</b>
-                    <span>{rooms.length} connected</span>
-                    <b>Outbox</b>
-                    <span>{pending.length} queued</span>
-                  </div>
-                </details>
+                <p>
+                  Live reception in a locked phone is supported through the
+                  Android foreground session. A browser tab may be suspended by
+                  your operating system.
+                </p>
+                <div className="connection-panel">
+                  <b>SERVER</b>
+                  <span>{online ? "CONNECTED" : "UNREACHABLE"}</span>
+                  <b>AUDIO ROOMS</b>
+                  <span>{rooms.length} CONNECTED</span>
+                  <b>OUTBOX</b>
+                  <span>{pending.length} QUEUED</span>
+                </div>
                 <button className="outline" onClick={() => void flush()}>
                   <RefreshCw size={15} />
                   Retry queued messages
@@ -1392,6 +1816,54 @@ export default function App() {
           )}
         </main>
       </div>
+      <nav className="bottom-nav">
+        <button
+          className={page === "threads" ? "active" : ""}
+          onClick={() => setPage("threads")}
+        >
+          <MessageSquare />
+          <span>THREADS</span>
+        </button>
+        {user.role === "admin" && (
+          <button
+            className={page === "map" ? "active" : ""}
+            onClick={() => setPage("map")}
+          >
+            <Activity />
+            <span>MAP</span>
+          </button>
+        )}
+        <button
+          className={page === "comms" ? "active" : ""}
+          onClick={() => setPage("comms")}
+        >
+          <Radio />
+          <span>PTT COMMS</span>
+        </button>
+        <button
+          className={page === "people" ? "active" : ""}
+          onClick={() => setPage("people")}
+        >
+          <Users />
+          <span>PEOPLE</span>
+        </button>
+        {user.role === "admin" && (
+          <button
+            className={page === "admin" ? "active" : ""}
+            onClick={() => setPage("admin")}
+          >
+            <Activity />
+            <span>DISPATCH</span>
+          </button>
+        )}
+        <button
+          className={page === "settings" ? "active" : ""}
+          onClick={() => setPage("settings")}
+        >
+          <Settings />
+          <span>SESSION</span>
+        </button>
+      </nav>
     </div>
   );
 }

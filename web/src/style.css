@@ -6,6 +6,41 @@
   font-weight: 400;
   font-size: 14px;
 }
+/* Display the supplied square logo's wordmark without its empty margins. */
+.brand {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: 140px;
+  height: 64px;
+  overflow: hidden;
+}
+.brand > img {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  max-width: none;
+  left: -76px;
+  top: -99px;
+}
+.danger-button {
+  color: #963c30;
+  border-color: #bb8075;
+}
+.deleted-channels {
+  margin-top: 20px;
+  border-top: 1px solid #ddd;
+  padding-top: 18px;
+}
+.deleted-channels summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.deleted-channels > p {
+  font-size: 12px;
+  color: #666;
+  margin: 12px 0;
+}
 * {
   box-sizing: border-box;
 }
@@ -697,6 +732,16 @@ aside nav button.active {
 .channel-admin h3 {
   margin-bottom: 6px;
 }
+.channel-admin > button {
+  margin: 10px 8px 0 0;
+}
+.channel-rename {
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.channel-rename input {
+  min-width: 180px;
+}
 .member-checks {
   display: flex;
   gap: 16px;
@@ -1223,38 +1268,31 @@ aside nav button.active {
     font-size: 7px;
   }
 }
-.log-folders { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-.log-folders button { padding: 8px 12px; border: 1px solid #bbb; }
-.transcript { padding: 12px; margin: 10px 0; background: #f3f3f1; border-left: 2px solid #777; overflow-wrap: anywhere; }
-.transcript .mono { font-size: 9px; color: #666; }
-.transcript p { margin: 8px 0 0; }
-.transcript button { margin-top: 8px; font-size: 11px; }
-
-/* Frame the existing square brand asset around its wordmark. */
-.brand {
-  position: relative;
-  display: block;
-  flex-shrink: 0;
-  width: 140px;
-  height: 64px;
-  overflow: hidden;
-}
-.brand > img {
-  position: absolute;
-  width: 280px;
-  height: 280px;
-  max-width: none;
-  left: -76px;
-  top: -99px;
-}
-.topbar .top-status {
+.log-folders {
   display: flex;
-  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
-.communication-dock > .broadcast-selector {
-  border-top: 0;
-  padding-top: 0;
+.log-folders button {
+  padding: 8px 12px;
+  border: 1px solid #bbb;
 }
-.communication-dock > .dock-actions:empty {
-  display: none;
+.transcript {
+  padding: 12px;
+  margin: 10px 0;
+  background: #f3f3f1;
+  border-left: 2px solid #777;
+  overflow-wrap: anywhere;
+}
+.transcript .mono {
+  font-size: 9px;
+  color: #666;
+}
+.transcript p {
+  margin: 8px 0 0;
+}
+.transcript button {
+  margin-top: 8px;
+  font-size: 11px;
 }

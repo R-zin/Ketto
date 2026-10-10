@@ -17,6 +17,8 @@ import {
   Check,
   AlertTriangle,
 } from "lucide-react";
+import { exampleFloors, examplePlanImage } from "./exampleVenue";
+
 const ago = (at: number) => {
   const minutes = Math.max(0, Math.floor((Date.now() - at) / 60000));
   return minutes < 1
@@ -26,26 +28,6 @@ const ago = (at: number) => {
       : `${Math.floor(minutes / 60)}h ago`;
 };
 const status = (s: string) => s.replaceAll("_", " ");
-const demoFloor = {
-  id: "demo-venue",
-  name: "Demo venue",
-  demo: true,
-  image_id: null,
-};
-const demoZones = [
-  { id: "demo-stage", name: "Stage", x: 0.5, y: 0.245 },
-  { id: "demo-audience", name: "Audience", x: 0.5, y: 0.53 },
-  { id: "demo-registration", name: "Registration", x: 0.15, y: 0.275 },
-  { id: "demo-food", name: "Food court", x: 0.15, y: 0.6 },
-  { id: "demo-first-aid", name: "First aid", x: 0.85, y: 0.275 },
-  { id: "demo-entrance", name: "Entrance", x: 0.5, y: 0.81 },
-].map((zone) => ({
-  ...zone,
-  floor_id: demoFloor.id,
-  demo: true,
-  volunteers: 0,
-  openIssues: 0,
-}));
 export function useOperations(user: any, canSync: boolean) {
   const [data, setData] = useState<any>(),
     [live, setLive] = useState(false),
@@ -304,12 +286,10 @@ export function CommunicationPanel({
   ops,
   user,
   onConversation,
-  onPrepared,
 }: {
   ops: ReturnType<typeof useOperations>;
   user: any;
   onConversation: (cid: string) => void;
-  onPrepared?: () => void;
 }) {
   const d = ops.data,
     [selected, setSelected] = useState<string[]>([]),
@@ -341,24 +321,36 @@ export function CommunicationPanel({
       <div className="mobile-location">
         <LocationControl ops={ops} />
       </div>
-      {user.role !== "admin" && (
-        <div className="dock-assignment">
-          <span className="eyebrow">Your channels</span>
-          <strong>
-            {(d.channelMemberships || []).map((t: any) => t.name).join(", ") ||
-              "No channels assigned"}
-          </strong>
-          <small>
-            Duty admin: {d.dutyAdmin?.name || "Not designated"} ·{" "}
-            {d.dutyAdmin?.reachable
-              ? d.dutyAdmin.busy
-                ? "Busy"
-                : "Available"
-              : "Unavailable"}
-          </small>
-        </div>
-      )}
+      <div className="dock-assignment">
+        <span className="eyebrow">
+          {user.role === "admin"
+            ? "DUTY ADMIN / LIVE COMMS"
+            : "YOUR ASSIGNMENT"}
+        </span>
+        <strong>
+          {(d.channelMemberships || []).map((t: any) => t.name).join(", ") ||
+            (user.role === "admin" ? "Control room" : "Team unassigned")}
+        </strong>
+        <small>
+          Duty admin: {d.dutyAdmin?.name || "Not designated"} ·{" "}
+          {d.dutyAdmin?.reachable
+            ? d.dutyAdmin.busy
+              ? "Busy"
+              : "Available"
+            : "Unavailable"}
+        </small>
+      </div>
       <div className="dock-actions">
+        {(d.channelMemberships || []).map((t: any) => (
+          <button
+            key={t.id}
+            className="primary"
+            onClick={() => onConversation(t.channel_id)}
+          >
+            <Radio size={16} />
+            {t.name} PTT
+          </button>
+        ))}
         {user.role !== "admin" && !d.exchange && (
           <button
             className="outline"
@@ -435,7 +427,6 @@ export function CommunicationPanel({
                   everyone,
                 });
                 onConversation(b.id);
-                onPrepared?.();
               })
             }
           >
@@ -476,11 +467,13 @@ export default function Operations({
   user,
   page,
   onConversation,
+  onManageChannels,
 }: {
   ops: ReturnType<typeof useOperations>;
   user: any;
   page: string;
   onConversation: (cid: string) => void;
+  onManageChannels?: () => void;
 }) {
   const [floor, setFloor] = useState(""),
     [zone, setZone] = useState<any>(),
@@ -488,24 +481,119 @@ export default function Operations({
     [filter, setFilter] = useState("open"),
     [create, setCreate] = useState(false),
     [floorName, setFloorName] = useState(""),
+    [creatingFloor, setCreatingFloor] = useState(false),
+    [removingZone, setRemovingZone] = useState(false),
+    [savingZone, setSavingZone] = useState(false),
     [manageVenue, setManageVenue] = useState(false),
     [placing, setPlacing] = useState(false),
     [zoneName, setZoneName] = useState(""),
     [zoneEdit, setZoneEdit] = useState(false),
-    [reply, setReply] = useState("");
+    [reply, setReply] = useState(""),
+    [examplesVisible, setExamplesVisible] = useState(
+      () => localStorage.getItem("kettoo.example-maps." + user.id) !== "hidden",
+    );
+  const [hiddenExampleFloors, setHiddenExampleFloors] = useState<string[]>(
+    () => {
+      try {
+        const saved = JSON.parse(
+          localStorage.getItem("kettoo.hidden-example-floors." + user.id) ||
+            "[]",
+        );
+        return Array.isArray(saved)
+          ? saved.filter((id) => typeof id === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    },
+  );
+  const [removingFloor, setRemovingFloor] = useState(false);
+  const [savingExample, setSavingExample] = useState(false);
   const d = ops.data;
-  const floors = [...(d?.floors || []), demoFloor];
+  const visibleExampleFloors = examplesVisible
+    ? exampleFloors.filter(
+        (f) =>
+          !hiddenExampleFloors.includes(f.id) &&
+          !d?.floors.some((saved: any) => saved.id === f.id),
+      )
+    : [];
+  const floors = [...(d?.floors || []), ...visibleExampleFloors];
+  const toggleExamples = (visible: boolean) => {
+    if (visible) {
+      setHiddenExampleFloors([]);
+      localStorage.removeItem("kettoo.hidden-example-floors." + user.id);
+    }
+    localStorage.setItem(
+      "kettoo.example-maps." + user.id,
+      visible ? "visible" : "hidden",
+    );
+    setExamplesVisible(visible);
+    setZone(undefined);
+    setZoneEdit(false);
+    setPlacing(false);
+    setFloor(
+      visible
+        ? exampleFloors[0].id
+        : d?.floors.find((f: any) => f.image_id)?.id || d?.floors[0]?.id || "",
+    );
+  };
   useEffect(() => {
     if (d && !floors.some((f: any) => f.id === floor))
-      setFloor(d.floors.find((f: any) => f.image_id)?.id || demoFloor.id);
-  }, [d?.floors, floor]);
+      setFloor(
+        d.floors.find((f: any) => f.image_id)?.id ||
+          d.floors[0]?.id ||
+          (examplesVisible
+            ? exampleFloors.find((f) => !hiddenExampleFloors.includes(f.id))?.id
+            : "") ||
+          "",
+      );
+  }, [d?.floors, floor, examplesVisible, hiddenExampleFloors]);
   const run = async (fn: () => Promise<any>) => {
+    ops.setError("");
     try {
       await fn();
       await ops.refresh();
       window.dispatchEvent(new Event("kettoo-permissions"));
     } catch (e: any) {
       ops.setError(e.message);
+    }
+  };
+  const saveExampleVenue = async () => {
+    setSavingExample(true);
+    ops.setError("");
+    try {
+      const images = await Promise.all(
+        exampleFloors.map((f) => examplePlanImage(f.image)),
+      );
+      const result = await api("/admin/venue-template", {
+        floors: exampleFloors.map((f) => ({
+          id: f.id,
+          name: f.name,
+          zones: f.zones.map((z) => ({
+            id: z.id,
+            name: z.name,
+            x: z.x,
+            y: z.y,
+          })),
+        })),
+      });
+      for (let index = 0; index < exampleFloors.length; index++) {
+        const f = exampleFloors[index];
+        if (!result.floors.find((saved: any) => saved.id === f.id)?.image_id)
+          await phaseUpload("floors/" + f.id, images[index], f.id + ".png");
+      }
+      await ops.refresh();
+      toggleExamples(false);
+      setFloor(exampleFloors[0].id);
+      window.dispatchEvent(new Event("kettoo-operations"));
+    } catch (e: any) {
+      ops.setError(
+        e.message +
+          " You can retry saving the example without creating duplicate floors.",
+      );
+      await ops.refresh();
+    } finally {
+      setSavingExample(false);
     }
   };
   const openThread = async (iid: string) => {
@@ -532,10 +620,19 @@ export default function Operations({
         Connect to the organisation server to load maps and threads.
       </div>
     );
+  const people = d.people || d.volunteers;
   const current = floors.find((f: any) => f.id === floor),
     zones = current?.demo
-      ? demoZones
-      : d.zones.filter((z: any) => z.floor_id === floor),
+      ? current.zones
+      : d.zones
+          .filter((z: any) => z.floor_id === floor)
+          .map((z: any) => ({
+            ...z,
+            volunteers: z.onDutyPeople ?? z.volunteers,
+            reportedPeople:
+              z.reportedPeople ??
+              people.filter((u: any) => u.checkin?.zone_id === z.id).length,
+          })),
     activeZone = zone ? zones.find((z: any) => z.id === zone.id) : null;
   const issues = d.issues.filter(
     (x: any) =>
@@ -549,11 +646,75 @@ export default function Operations({
             ))) ||
       (filter === "mine" && x.owner_id === user.id),
   );
+  const removeFloor = () => {
+    if (!current) return;
+    if (current.demo) {
+      const hidden = [...new Set([...hiddenExampleFloors, current.id])];
+      localStorage.setItem(
+        "kettoo.hidden-example-floors." + user.id,
+        JSON.stringify(hidden),
+      );
+      setHiddenExampleFloors(hidden);
+      setFloor(
+        exampleFloors.find((f) => !hidden.includes(f.id))?.id ||
+          d.floors[0]?.id ||
+          "",
+      );
+      setZone(undefined);
+      setZoneEdit(false);
+      setPlacing(false);
+      return;
+    }
+    const locations = people.filter(
+      (v: any) => v.checkin?.floor_id === current.id,
+    ).length;
+    if (
+      !window.confirm(
+        `Remove "${current.name}"?\n\nIts floor plan and ${zones.length} zone(s) will be removed. ${locations} reported volunteer location(s) will be cleared. Issue threads and their replies will be kept.\n\nThis cannot be undone.`,
+      )
+    )
+      return;
+    setRemovingFloor(true);
+    void run(async () => {
+      try {
+        await api("/admin/floors/" + current.id, undefined, "DELETE");
+        setZone(undefined);
+        setPlacing(false);
+        setZoneEdit(false);
+      } finally {
+        setRemovingFloor(false);
+      }
+    });
+  };
+  const removeZone = async () => {
+    if (!activeZone || activeZone.demo || removingZone) return;
+    if (
+      !window.confirm(
+        `Remove “${activeZone.name}”? Its reported locations will be cleared. Issue threads and replies are kept. This cannot be undone.`,
+      )
+    )
+      return;
+    setRemovingZone(true);
+    try {
+      await run(async () => {
+        await api("/admin/zones/" + activeZone.id, undefined, "DELETE");
+        setZone(undefined);
+        setZoneEdit(false);
+      });
+    } finally {
+      setRemovingZone(false);
+    }
+  };
   return (
     <div className="operations">
       <div className="page-title">
         <div>
-          <h1>{page === "map" ? "Operations" : "Threads"}</h1>
+          <span className="eyebrow">
+            OPERATIONS / {page === "map" ? "VENUE" : "ISSUE THREADS"}
+          </span>
+          <h1>
+            {page === "map" ? "The venue, at a glance." : "Follow through."}
+          </h1>
         </div>
         {page === "map" && user.role === "admin" ? (
           <button
@@ -590,10 +751,7 @@ export default function Operations({
             <div className="operation-stats">
               <div>
                 <b>
-                  {
-                    d.volunteers.filter((u: any) => u.connected && u.onDuty)
-                      .length
-                  }
+                  {people.filter((u: any) => u.connected && u.onDuty).length}
                 </b>
                 Connected on duty
               </div>
@@ -604,11 +762,75 @@ export default function Operations({
                 Unresolved issues
               </div>
               <div>
-                <b>{d.volunteers.filter((u: any) => !u.checkin).length}</b>
+                <b>{people.filter((u: any) => !u.checkin).length}</b>
                 Location unknown
               </div>
             </div>
           )}
+          <div className="venue-example-controls">
+            {current &&
+              !current.demo &&
+              exampleFloors.some((f) => f.id === current.id) && (
+                <span className="example-map-label">
+                  Shared college test venue · Available on mobile · Choose a
+                  floor and zone to check in
+                </span>
+              )}
+            {user.role === "admin" &&
+              exampleFloors.some(
+                (f) =>
+                  !d.floors.some(
+                    (saved: any) => saved.id === f.id && saved.image_id,
+                  ),
+              ) && (
+                <button
+                  className="primary"
+                  disabled={!ops.live || savingExample}
+                  onClick={() => void saveExampleVenue()}
+                >
+                  {savingExample
+                    ? "Saving shared venue…"
+                    : "Save college example as shared venue"}
+                </button>
+              )}
+            {current?.demo ? (
+              <>
+                <span className="example-map-label">
+                  College hackathon · Preview only · Not available on mobile
+                </span>
+                <div className="row-actions">
+                  {d.floors.length > 0 && (
+                    <button
+                      className="outline"
+                      onClick={() => {
+                        setFloor(d.floors[0].id);
+                        setZone(undefined);
+                      }}
+                    >
+                      Your venue
+                    </button>
+                  )}
+                  <button
+                    className="outline"
+                    onClick={() => toggleExamples(false)}
+                  >
+                    Hide example maps
+                  </button>
+                </div>
+              </>
+            ) : (
+              !exampleFloors.every((f) =>
+                d.floors.some((saved: any) => saved.id === f.id),
+              ) && (
+                <button
+                  className="outline"
+                  onClick={() => toggleExamples(true)}
+                >
+                  View college hackathon example
+                </button>
+              )
+            )}
+          </div>
           <div className="map-layout">
             <section className="map-panel">
               <div className="map-toolbar">
@@ -616,6 +838,7 @@ export default function Operations({
                   Floor
                   <select
                     value={floor}
+                    disabled={!floors.length}
                     onChange={(e) => {
                       setFloor(e.target.value);
                       setZone(undefined);
@@ -623,11 +846,24 @@ export default function Operations({
                       setPlacing(false);
                     }}
                   >
-                    {floors.map((f: any) => (
-                      <option value={f.id} key={f.id}>
-                        {f.name}
-                      </option>
-                    ))}
+                    {d.floors.length > 0 && (
+                      <optgroup label="Your venue">
+                        {d.floors.map((f: any) => (
+                          <option value={f.id} key={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {visibleExampleFloors.length > 0 && (
+                      <optgroup label="College hackathon example">
+                        {visibleExampleFloors.map((f) => (
+                          <option value={f.id} key={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </label>
                 {manageVenue &&
@@ -658,8 +894,8 @@ export default function Operations({
                   <div className="floor-image">
                     {current.demo ? (
                       <img
-                        src="/demo-floor-plan.svg"
-                        alt="Demo venue floor plan with stage, audience seating, registration, food court, first aid and entrance"
+                        src={current.image}
+                        alt={"Example college hackathon map: " + current.name}
                       />
                     ) : (
                       <OperationImage
@@ -685,7 +921,9 @@ export default function Operations({
                       <button
                         key={z.id}
                         className={
-                          "zone-marker " + (z.openIssues ? "has-issues" : "")
+                          "zone-marker " +
+                          (z.openIssues ? "has-issues " : "") +
+                          (activeZone?.id === z.id ? "is-selected" : "")
                         }
                         style={{ left: z.x * 100 + "%", top: z.y * 100 + "%" }}
                         onClick={() => {
@@ -693,18 +931,19 @@ export default function Operations({
                           setZoneName(z.name);
                           setZoneEdit(false);
                         }}
+                        aria-pressed={activeZone?.id === z.id}
                         aria-label={
                           z.demo
-                            ? `${z.name}: demo zone`
-                            : `${z.name}: ${z.volunteers} volunteers, ${z.openIssues} open issues`
+                            ? `${z.name}: example zone`
+                            : `${z.name}: ${z.reportedPeople} people checked in, ${z.volunteers} connected on duty, ${z.openIssues} open issues`
                         }
                       >
                         <MapPin size={18} />
                         <span>{z.name}</span>
                         <small>
                           {z.demo
-                            ? "Demo zone"
-                            : `${z.volunteers} on duty · ${z.openIssues} issues`}
+                            ? "Example zone"
+                            : `${z.reportedPeople} ${z.reportedPeople === 1 ? "person" : "people"} · ${z.volunteers} on duty · ${z.openIssues} issues`}
                         </small>
                       </button>
                     ))}
@@ -753,8 +992,8 @@ export default function Operations({
               {(current?.image_id || current?.demo) && (
                 <small className="map-legend">
                   {current.demo
-                    ? "Demo illustration · Select a zone to explore. No real locations or issues are shown."
-                    : "Select a zone for volunteers. Numbered markers open unresolved threads."}
+                    ? "College hackathon example · Select a zone to explore. Illustrative layout, not a real campus map."
+                    : "People counts use their last reported check-in. On duty counts require a live connection. Counts refresh automatically; numbered markers open unresolved threads."}
                 </small>
               )}
               {manageVenue &&
@@ -780,74 +1019,129 @@ export default function Operations({
               {manageVenue && user.role === "admin" && (
                 <form
                   className="inline-form"
-                  onSubmit={(e) => {
+                  onSubmit={async (e) => {
                     e.preventDefault();
-                    void run(async () => {
-                      await api("/admin/floors", { name: floorName });
-                      setFloorName("");
-                    });
+                    if (creatingFloor) return;
+                    setCreatingFloor(true);
+                    try {
+                      await run(async () => {
+                        await api("/admin/floors", { name: floorName });
+                        setFloorName("");
+                      });
+                    } finally {
+                      setCreatingFloor(false);
+                    }
                   }}
                 >
                   <input
                     required
                     value={floorName}
+                    maxLength={80}
+                    disabled={creatingFloor}
                     onChange={(e) => setFloorName(e.target.value)}
                     placeholder="New floor name"
                   />
-                  <button className="primary" disabled={!ops.live}>
+                  <button
+                    className="primary"
+                    disabled={!ops.live || creatingFloor}
+                  >
                     <Plus size={15} />
-                    Add floor
+                    {creatingFloor ? "Adding floor…" : "Add floor"}
                   </button>
                 </form>
+              )}
+              {manageVenue && user.role === "admin" && current && (
+                <div className="floor-removal">
+                  <button
+                    className="outline danger-button"
+                    disabled={removingFloor || (!current.demo && !ops.live)}
+                    onClick={removeFloor}
+                  >
+                    {removingFloor
+                      ? "Removing…"
+                      : current.demo
+                        ? "Remove example floor"
+                        : "Remove floor"}
+                  </button>
+                  <small>
+                    {current.demo
+                      ? "Hides this example floor in this browser. View college hackathon example restores it."
+                      : "Removes the floor and its zones. Issue threads are kept."}
+                  </small>
+                </div>
               )}
             </section>
             <section className="zone-details">
               <span className="eyebrow">
-                {current?.demo ? "DEMO ZONE" : "ZONE DETAILS"}
+                {current?.demo ? "EXAMPLE ZONE" : "ZONE DETAILS"}
               </span>
               <h2>{activeZone?.name || "Select a zone"}</h2>
               {activeZone ? (
                 <>
                   <p>
                     {activeZone.demo
-                      ? "This sample zone is for visualization. Choose your real floor plan to view volunteer locations and issues."
-                      : `${activeZone.volunteers} connected, on duty · ${activeZone.openIssues} unresolved issues`}
+                      ? activeZone.description
+                      : `${activeZone.reportedPeople} people last checked in · ${activeZone.volunteers} connected, on duty · ${activeZone.openIssues} unresolved issues`}
                   </p>
                   {user.role === "admin" && !activeZone.demo && (
                     <button
                       className="outline"
+                      disabled={!ops.live || savingZone || removingZone}
                       onClick={() => setZoneEdit(!zoneEdit)}
                     >
                       Edit zone
                     </button>
                   )}
+                  {manageVenue && user.role === "admin" && !activeZone.demo && (
+                    <button
+                      className="outline danger-button"
+                      disabled={!ops.live || savingZone || removingZone}
+                      onClick={() => void removeZone()}
+                    >
+                      {removingZone ? "Removing zone…" : "Remove zone"}
+                    </button>
+                  )}
                   {zoneEdit && !activeZone.demo && (
                     <form
-                      onSubmit={(e) => {
+                      onSubmit={async (e) => {
                         e.preventDefault();
-                        void run(async () => {
-                          await api(
-                            "/admin/zones/" + activeZone.id,
-                            {
-                              name: zoneName,
-                              x: activeZone.x,
-                              y: activeZone.y,
-                            },
-                            "PUT",
-                          );
-                          setZoneEdit(false);
-                        });
+                        if (savingZone) return;
+                        setSavingZone(true);
+                        try {
+                          await run(async () => {
+                            await api(
+                              "/admin/zones/" + activeZone.id,
+                              {
+                                name: zoneName,
+                                x: activeZone.x,
+                                y: activeZone.y,
+                              },
+                              "PUT",
+                            );
+                            setZoneEdit(false);
+                          });
+                        } finally {
+                          setSavingZone(false);
+                        }
                       }}
                     >
                       <input
                         required
+                        maxLength={80}
+                        aria-label="Zone name"
+                        disabled={savingZone}
                         value={zoneName}
                         onChange={(e) => setZoneName(e.target.value)}
                       />
-                      <button className="primary">Save name</button>
+                      <button
+                        className="primary"
+                        disabled={!ops.live || savingZone}
+                      >
+                        Save name
+                      </button>
                     </form>
                   )}
-                  {d.volunteers
+                  {people
                     .filter((u: any) => u.checkin?.zone_id === activeZone.id)
                     .map((u: any) => (
                       <div className="zone-volunteer" key={u.id}>
@@ -886,12 +1180,12 @@ export default function Operations({
               ) : (
                 <p>
                   {current?.demo
-                    ? "Select a zone to explore this sample event venue."
+                    ? "Select a hall, service area or access point to explore the college hackathon example."
                     : "See volunteers and unresolved threads linked to this location."}
                 </p>
               )}
               {!current?.demo && <h3>Location unknown</h3>}
-              {d.volunteers
+              {people
                 .filter((u: any) => !current?.demo && !u.checkin)
                 .map((u: any) => (
                   <p key={u.id}>
@@ -900,6 +1194,11 @@ export default function Operations({
                 ))}
             </section>
           </div>
+          {user.role === "admin" && onManageChannels && (
+            <button className="outline" onClick={onManageChannels}>
+              Manage channel memberships
+            </button>
+          )}
         </>
       ) : (
         <>
@@ -907,7 +1206,10 @@ export default function Operations({
             <div className="thread-filters">
               {[
                 ["open", "Open"],
-                ["team", user.role === "admin" ? "Channel issues" : "My channels"],
+                [
+                  "team",
+                  user.role === "admin" ? "Channel issues" : "My channels",
+                ],
                 ["mine", "Assigned to me"],
                 ["all", "All history"],
               ].map(([k, label]) => (

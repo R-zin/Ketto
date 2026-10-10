@@ -30,7 +30,7 @@ export function registerPhase2(c: Context) {
   const { app, db, auth, admin, serial } = c;
   const assignedTeams = (uid: string) =>
     db.all(
-      "SELECT t.*,o.channel_id,o.media_epoch FROM operational_assignments a JOIN teams t ON t.id=a.team_id JOIN operational_teams o ON o.team_id=t.id WHERE a.user_id=? ORDER BY a.rowid",
+      "SELECT t.*,o.channel_id,o.media_epoch FROM operational_assignments a JOIN teams t ON t.id=a.team_id JOIN operational_teams o ON o.team_id=t.id WHERE a.user_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=o.channel_id) ORDER BY a.rowid",
       uid,
     );
   const team = (uid: string) => assignedTeams(uid)[0];
@@ -98,6 +98,13 @@ export function registerPhase2(c: Context) {
     return result;
   };
   function pttAllowed(a: Auth, conversation: any) {
+    if (
+      db.get(
+        "SELECT 1 FROM archived_channels WHERE conversation_id=?",
+        conversation.id,
+      )
+    )
+      return false;
     if (conversation.kind === "broadcast") {
       const b = db.get(
         "SELECT * FROM broadcast_sessions WHERE conversation_id=?",
@@ -239,25 +246,23 @@ export function registerPhase2(c: Context) {
       .map(formatted);
     const users =
       a.role === "admin"
-        ? db
-            .all("SELECT id,name FROM users WHERE approved=1 AND role='staff'")
-            .map((u) => {
-              const devices = c
-                .presence()
-                .filter((p) => p.user === u.id && now - p.lastSeen < 30000);
-              return {
-                ...u,
-                team: team(u.id),
-                channelMemberships: assignedTeams(u.id),
-                connected: devices.length > 0,
-                onDuty: devices.some((p) => p.onDuty),
-                checkin:
-                  db.get(
-                    "SELECT c.*,z.name zone_name,z.floor_id FROM checkins c JOIN venue_zones z ON z.id=c.zone_id WHERE c.user_id=?",
-                    u.id,
-                  ) || null,
-              };
-            })
+        ? db.all("SELECT id,name,role FROM users WHERE approved=1").map((u) => {
+            const devices = c
+              .presence()
+              .filter((p) => p.user === u.id && now - p.lastSeen < 30000);
+            return {
+              ...u,
+              team: team(u.id),
+              channelMemberships: assignedTeams(u.id),
+              connected: devices.length > 0,
+              onDuty: devices.some((p) => p.onDuty),
+              checkin:
+                db.get(
+                  "SELECT c.*,z.name zone_name,z.floor_id FROM checkins c JOIN venue_zones z ON z.id=c.zone_id WHERE c.user_id=?",
+                  u.id,
+                ) || null,
+            };
+          })
         : [];
     const zones = db.all("SELECT * FROM venue_zones").map((z) => ({
       ...z,
@@ -265,6 +270,14 @@ export function registerPhase2(c: Context) {
         (x) => x.zone_id === z.id && x.status !== "resolved",
       ).length,
       volunteers: users.filter(
+        (u) =>
+          u.role === "staff" &&
+          u.connected &&
+          u.onDuty &&
+          u.checkin?.zone_id === z.id,
+      ).length,
+      reportedPeople: users.filter((u) => u.checkin?.zone_id === z.id).length,
+      onDutyPeople: users.filter(
         (u) => u.connected && u.onDuty && u.checkin?.zone_id === z.id,
       ).length,
     }));
@@ -273,7 +286,7 @@ export function registerPhase2(c: Context) {
       team: team(a.id) || null,
       channelMemberships: assignedTeams(a.id),
       teams: db.all(
-        "SELECT t.*,o.channel_id FROM teams t JOIN operational_teams o ON o.team_id=t.id",
+        "SELECT t.*,o.channel_id FROM teams t JOIN operational_teams o ON o.team_id=t.id WHERE NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=o.channel_id)",
       ),
       floors: db.all("SELECT * FROM venue_floors"),
       zones,
@@ -286,7 +299,8 @@ export function registerPhase2(c: Context) {
               now,
             )
           : [],
-      volunteers: users,
+      volunteers: users.filter((u) => u.role === "staff"),
+      people: users,
       checkin:
         db.get(
           "SELECT c.*,z.name zone_name,z.floor_id FROM checkins c JOIN venue_zones z ON z.id=c.zone_id WHERE c.user_id=?",
@@ -332,7 +346,15 @@ export function registerPhase2(c: Context) {
         tid = prior?.id || id(),
         cid = id();
       if (db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
-        bad(409, "Operational team already exists");
+        bad(
+          409,
+          db.get(
+            "SELECT 1 FROM operational_teams o JOIN archived_channels ac ON ac.conversation_id=o.channel_id WHERE o.team_id=?",
+            tid,
+          )
+            ? "This channel was deleted. Restore it under Deleted channels, or choose another name."
+            : "Operational team already exists",
+        );
       if (!db.get("SELECT 1 FROM operational_teams LIMIT 1")) {
         // Switch existing receive rooms to the new permission model atomically.
         for (const legacy of db.all(
@@ -398,7 +420,12 @@ export function registerPhase2(c: Context) {
         ),
       ];
       for (const tid of nextIds)
-        if (!db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
+        if (
+          !db.get(
+            "SELECT 1 FROM operational_teams o WHERE team_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=o.channel_id)",
+            tid,
+          )
+        )
           bad(400, "Channel unavailable");
       const removed = oldTeams.filter((t) => !nextIds.includes(t.id));
       const added = nextIds
@@ -599,7 +626,12 @@ export function registerPhase2(c: Context) {
       if (!b.everyone && !b.teamIds.length)
         bad(400, "Select at least one team");
       for (const tid of b.teamIds)
-        if (!db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
+        if (
+          !db.get(
+            "SELECT 1 FROM operational_teams o WHERE team_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=o.channel_id)",
+            tid,
+          )
+        )
           bad(400, "Unknown operational team");
       const recipients = b.everyone
         ? db.all("SELECT id FROM users WHERE approved=1").map((u) => u.id)
@@ -692,6 +724,201 @@ export function registerPhase2(c: Context) {
       return { ok: true };
     }),
   );
+  app.put("/api/admin/channels/:cid", async (req) =>
+    serial(async () => {
+      const a = admin(req),
+        cid = key.parse((req.params as any).cid);
+      const b = z
+        .object({ name: z.string().trim().min(2).max(80) })
+        .parse(req.body);
+      const channel = db.get("SELECT * FROM conversations WHERE id=?", cid);
+      if (!channel || channel.kind !== "channel")
+        bad(404, "Channel unavailable");
+      if (
+        db.get("SELECT 1 FROM archived_channels WHERE conversation_id=?", cid)
+      )
+        bad(409, "Restore this channel before renaming it");
+      const op = db.get(
+        "SELECT team_id FROM operational_teams WHERE channel_id=?",
+        cid,
+      );
+      if (
+        db.get(
+          "SELECT 1 FROM conversations WHERE kind='channel' AND name=? AND id!=?",
+          b.name,
+          cid,
+        ) ||
+        (op &&
+          db.get(
+            "SELECT 1 FROM teams WHERE name=? AND id!=?",
+            b.name,
+            op.team_id,
+          ))
+      )
+        bad(409, "A channel or team already uses this name");
+      db.transaction(() => {
+        db.run("UPDATE conversations SET name=? WHERE id=?", b.name, cid);
+        if (op) {
+          db.run("UPDATE teams SET name=? WHERE id=?", b.name, op.team_id);
+          for (const broadcast of db.all("SELECT * FROM broadcast_sessions")) {
+            const teamIds: string[] = JSON.parse(broadcast.team_ids);
+            if (teamIds.includes(op.team_id))
+              db.run(
+                "UPDATE conversations SET name=? WHERE id=?",
+                "Admin broadcast · " +
+                  teamIds
+                    .map(
+                      (id) =>
+                        db.get("SELECT name FROM teams WHERE id=?", id).name,
+                    )
+                    .join(", "),
+                broadcast.conversation_id,
+              );
+          }
+        }
+        db.audit(a.id, "rename-channel", cid);
+      });
+      c.event("permissions", {});
+      notify();
+      return { ok: true, name: b.name };
+    }),
+  );
+  app.delete("/api/admin/channels/:cid", async (req) =>
+    serial(async () => {
+      const a = admin(req),
+        cid = key.parse((req.params as any).cid);
+      const channel = db.get("SELECT * FROM conversations WHERE id=?", cid);
+      if (!channel) bad(404, "Channel unavailable");
+      if (channel.kind !== "channel")
+        bad(400, "Only ordinary channels can be deleted");
+      if (
+        db.get("SELECT 1 FROM archived_channels WHERE conversation_id=?", cid)
+      )
+        return { ok: true, archived: true };
+      await c.closeChannel(cid);
+      const op = db.get(
+        "SELECT team_id FROM operational_teams WHERE channel_id=?",
+        cid,
+      );
+      if (op) {
+        for (const b of db.all(
+          "SELECT * FROM broadcast_sessions WHERE state!='ended'",
+        )) {
+          if (!JSON.parse(b.team_ids).includes(op.team_id)) continue;
+          await c.closeChannel(b.conversation_id);
+          db.run(
+            "UPDATE broadcast_sessions SET state='ended' WHERE conversation_id=?",
+            b.conversation_id,
+          );
+        }
+        // Rotate private PTT rooms whose shared-channel eligibility may change.
+        for (const room of db.all(
+          "SELECT DISTINCT m.conversation_id FROM members m JOIN conversations c ON c.id=m.conversation_id JOIN operational_assignments a ON a.user_id=m.user_id WHERE c.kind='private' AND a.team_id=?",
+          op.team_id,
+        ))
+          await c.closeChannel(room.conversation_id);
+      }
+      db.transaction(() => {
+        db.run(
+          "INSERT INTO archived_channels VALUES(?,?,?)",
+          cid,
+          Date.now(),
+          a.id,
+        );
+        db.audit(a.id, "archive-channel", cid);
+      });
+      c.event("permissions", {});
+      notify();
+      return { ok: true, archived: true };
+    }),
+  );
+  app.post("/api/admin/channels/:cid/restore", async (req) =>
+    serial(async () => {
+      const a = admin(req),
+        cid = key.parse((req.params as any).cid);
+      const channel = db.get("SELECT * FROM conversations WHERE id=?", cid);
+      if (!channel || channel.kind !== "channel")
+        bad(404, "Channel unavailable");
+      if (
+        db.get("SELECT 1 FROM archived_channels WHERE conversation_id=?", cid)
+      ) {
+        await c.closeChannel(cid);
+        db.transaction(() => {
+          db.run("DELETE FROM archived_channels WHERE conversation_id=?", cid);
+          db.audit(a.id, "restore-channel", cid);
+        });
+        c.event("permissions", {});
+        notify();
+      }
+      return { ok: true, archived: false };
+    }),
+  );
+  app.post("/api/admin/venue-template", async (req) =>
+    serial(async () => {
+      const a = admin(req);
+      const b = z
+        .object({
+          floors: z
+            .array(
+              z.object({
+                id: key.regex(/^example-/),
+                name: z.string().trim().min(1).max(80),
+                zones: z
+                  .array(
+                    z.object({
+                      id: key.regex(/^example-/),
+                      name: z.string().trim().min(1).max(80),
+                      x: z.number().min(0).max(1),
+                      y: z.number().min(0).max(1),
+                    }),
+                  )
+                  .max(100),
+              }),
+            )
+            .min(1)
+            .max(20),
+        })
+        .parse(req.body);
+      const ids = b.floors.flatMap((f) => [f.id, ...f.zones.map((z) => z.id)]);
+      if (new Set(ids).size !== ids.length) bad(400, "Duplicate template IDs");
+      for (const f of b.floors)
+        for (const zone of f.zones) {
+          const existing = db.get(
+            "SELECT floor_id FROM venue_zones WHERE id=?",
+            zone.id,
+          );
+          if (existing && existing.floor_id !== f.id)
+            bad(409, "Template zone belongs to another floor");
+        }
+      // Stable IDs make a retry safe; keep any administrator edits to saved maps.
+      db.transaction(() => {
+        for (const f of b.floors) {
+          if (db.get("SELECT 1 FROM venue_floors WHERE id=?", f.id)) continue;
+          db.run("INSERT INTO venue_floors(id,name) VALUES(?,?)", f.id, f.name);
+          for (const zone of f.zones)
+            db.run(
+              "INSERT INTO venue_zones VALUES(?,?,?,?,?)",
+              zone.id,
+              f.id,
+              zone.name,
+              zone.x,
+              zone.y,
+            );
+        }
+        db.audit(
+          a.id,
+          "import-venue-template",
+          b.floors.map((f) => f.id).join(","),
+        );
+      });
+      notify();
+      return {
+        floors: b.floors.map((f) =>
+          db.get("SELECT * FROM venue_floors WHERE id=?", f.id),
+        ),
+      };
+    }),
+  );
   app.post("/api/admin/floors", async (req) => {
     admin(req);
     const b = z
@@ -702,6 +929,42 @@ export function registerPhase2(c: Context) {
     notify();
     return { id: fid };
   });
+  app.delete("/api/admin/floors/:fid", async (req) =>
+    serial(async () => {
+      const a = admin(req),
+        fid = key.parse((req.params as any).fid);
+      if (!db.get("SELECT 1 FROM venue_floors WHERE id=?", fid))
+        bad(404, "Floor unavailable");
+      const removedZones = db.get(
+        "SELECT COUNT(*) n FROM venue_zones WHERE floor_id=?",
+        fid,
+      ).n;
+      const clearedCheckins = db.get(
+        "SELECT COUNT(*) n FROM checkins WHERE zone_id IN (SELECT id FROM venue_zones WHERE floor_id=?)",
+        fid,
+      ).n;
+      db.transaction(() => {
+        db.run(
+          "UPDATE issues SET zone_id=NULL,version=version+1,updated_at=? WHERE zone_id IN (SELECT id FROM venue_zones WHERE floor_id=?)",
+          Date.now(),
+          fid,
+        );
+        db.run(
+          "DELETE FROM checkins WHERE zone_id IN (SELECT id FROM venue_zones WHERE floor_id=?)",
+          fid,
+        );
+        db.run("DELETE FROM venue_zones WHERE floor_id=?", fid);
+        db.run(
+          "DELETE FROM phase_files WHERE scope='floor' AND scope_id=?",
+          fid,
+        );
+        db.run("DELETE FROM venue_floors WHERE id=?", fid);
+        db.audit(a.id, "remove-floor", fid);
+      });
+      notify();
+      return { ok: true, removedZones, clearedCheckins };
+    }),
+  );
   app.post("/api/admin/zones", async (req) => {
     admin(req);
     const b = z
@@ -726,6 +989,30 @@ export function registerPhase2(c: Context) {
     notify();
     return { id: zid };
   });
+  app.delete("/api/admin/zones/:zid", async (req) =>
+    serial(async () => {
+      const a = admin(req),
+        zid = key.parse((req.params as any).zid);
+      if (!db.get("SELECT 1 FROM venue_zones WHERE id=?", zid))
+        bad(404, "Zone unavailable");
+      const clearedCheckins = db.get(
+        "SELECT COUNT(*) n FROM checkins WHERE zone_id=?",
+        zid,
+      ).n;
+      db.transaction(() => {
+        db.run(
+          "UPDATE issues SET zone_id=NULL,version=version+1,updated_at=? WHERE zone_id=?",
+          Date.now(),
+          zid,
+        );
+        db.run("DELETE FROM checkins WHERE zone_id=?", zid);
+        db.run("DELETE FROM venue_zones WHERE id=?", zid);
+        db.audit(a.id, "remove-zone", zid);
+      });
+      notify();
+      return { ok: true, clearedCheckins };
+    }),
+  );
   app.put("/api/admin/zones/:zid", async (req) => {
     admin(req);
     const zid = key.parse((req.params as any).zid),
@@ -736,6 +1023,8 @@ export function registerPhase2(c: Context) {
           y: z.number().min(0).max(1),
         })
         .parse(req.body);
+    if (!db.get("SELECT 1 FROM venue_zones WHERE id=?", zid))
+      bad(404, "Zone unavailable");
     db.run(
       "UPDATE venue_zones SET name=?,x=?,y=? WHERE id=?",
       b.name,
@@ -817,7 +1106,13 @@ export function registerPhase2(c: Context) {
         : null;
     if (b.audience === "team" && !tid)
       bad(400, "An assigned channel is required");
-    if (tid && !db.get("SELECT 1 FROM operational_teams WHERE team_id=?", tid))
+    if (
+      tid &&
+      !db.get(
+        "SELECT 1 FROM operational_teams o WHERE team_id=? AND NOT EXISTS (SELECT 1 FROM archived_channels ac WHERE ac.conversation_id=o.channel_id)",
+        tid,
+      )
+    )
       bad(400, "Channel unavailable");
     if (a.role !== "admin" && b.teamId && !belongs(a.id, b.teamId))
       bad(403, "You are not assigned to this channel");
