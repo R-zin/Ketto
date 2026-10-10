@@ -58,7 +58,7 @@ Additional coordination tools include floor plans, named zones, staff check-ins 
 
 ### Demo Video
 
-**Google Drive demo video link: To be added.**
+**Google Drive demo video link:[Demo Video](https://drive.google.com/file/d/1MnvkUqDOb55uwyHQMiOQcbV1hwuGcG9E/view?usp=sharing) **
 
 ### Screenshots
 
