@@ -1,125 +1,231 @@
+# DEFINE 4.0
+
+Project submission for **DEFINE 4.0 — The World's Realest Hackathon**.
+
+---
+
 # Kettoo
 
-Kettoo is a private communications and coordination app for event teams. It combines a native Android app, a browser console, an organisation-run server, and self-hosted live audio/video. Version **0.3.0** includes the features below.
+![Kettoo project branding](./assets/brand/kettoo-logo-original.png)
 
-## Features
+## Team Information
 
-### Accounts, devices, and organisation
+- **Team Name**: Codio
+- **Track**: PS 01
 
-- Staff can request an account and register a device. An administrator must approve the account and device before they can use the organisation.
-- Admins sign in with their existing credentials and automatically enrol new browsers/devices. Explicitly revoked accounts and devices remain blocked.
-- Administrators can review and approve or revoke accounts and devices. Revocation blocks new authenticated API access and removes active media access when the media service is reachable.
-- Every installation keeps a persistent organisation identity. Private data, credentials, and signing keys belong to the organisation's local server and data directory.
-- Admins manage channels, volunteer memberships, and the designated duty-admin device. Volunteers can belong to multiple channels and switch channels when talking; communication access and physical location are managed separately.
-- Presence distinguishes connected devices, on-duty sessions, audio readiness, busy devices, and last seen.
+## Team Members
 
-### Conversations, messages, and attachments
+| Name | Role | GitHub | LinkedIn |
+|------|------|--------|----------|
+| Razin M | Team Lead | [@R-zin](https://github.com/R-zin) | To be added |
+| Steve Sony Jacob | ML Lead | [@SteveSonyJacob](https://github.com/SteveSonyJacob) | To be added |
+| Harikrishnan S | Android Developer | [@Harikrishnans1124](https://github.com/Harikrishanan1124) | To be added |
+| Navaneeth Krishna B | Core Backend | [@fornkb](https://github.com/fornkb) | To be added |
 
-- Staff can read and send messages in permitted channels, open private conversations with approved people, and use All Staff. Only admins can post to All Staff.
-- Messages include text, photos, videos, voice notes, recorded push-to-talk bursts, and admin broadcasts. Stable IDs make retries safe and prevent duplicate entries.
-- Delivery states distinguish server receipt, recipient receipt, and acknowledgement. A connection or audio-room status does not imply that a person heard a message.
-- Message history and attachments are restricted to the conversation's authorized members. Uploads are checked for type, size, and content; transfers pause during live communication and retry afterward.
-- Image attachments are limited to 5 MB, video to 10 MB, and audio to 1 MB. Conserve Data disables video.
-- Each person has an Inbox and personal Archive. Acknowledging a message requires server confirmation and archives only that person's copy; it keeps its original ID, recording, transcript, and attachments. Other recipients keep their own active copies until they acknowledge them.
+---
 
-### Live voice, broadcasts, and calls
+# Project Details
 
-- On-duty staff hold TALK to request permission to transmit on an eligible team or private-admin channel. The interface reports whether it is ready, requesting, transmitting, busy, or blocked; release stops transmission. Bursts are capped at 30 seconds.
-- Server-managed speaking leases serialize competing talkers and stop stale transmitters. The server decides who may publish to each LiveKit room.
-- A volunteer can reserve a private Talk to admin exchange with the designated duty-admin device, send a report, receive a reply, and end the exchange. Competing requests see busy/unavailable state.
-- Admins can prepare and end broadcasts to one team, selected teams, or everyone. Audience membership is fixed for each broadcast, and only its intended recipients receive its media and history access.
-- A broadcast takes priority over overlapping team PTT; unrelated team traffic can continue. Accepted private calls have exclusive audio priority. Audio reception is coordinated across screens, with speaker/headset routing available.
-- Private voice and video calls support ringing, accepting, rejecting, ending, and busy handling. Video calls require camera access; video is disabled by Conserve Data. Camera capture pauses when the app is no longer in the foreground.
-- PTT replay uses the same microphone capture track. The recording is saved to the message log and can be replayed after the burst.
+## Overview
 
-### Offline and nearby communication
+Kettoo is a private communicator that brings push-to-talk, chat, photo/video sharing and voice/video calls to staff members' phones. A native Android app and browser console connect through an organisation-hosted backend, with administrator-controlled access, channels and broadcasts. Local queues and direct Nearby communication between permitted Android phones help supported workflows continue during outages and synchronise after recovery.
 
-- Android stores messages and pending operations locally with Room; the browser uses IndexedDB. Queued sends, check-ins, issue reports, and replies retry after a connection returns, preserving IDs and showing pending or rejected status.
-- Android can cache conversation history and permitted issue details. Cached information may be stale while offline; new permission changes and revocations require reconnecting to the server.
-- With Nearby enabled and Android permissions granted, approved phones automatically discover and authenticate each other during an API or permitted media outage. No manual peer picker is required.
-- Directly connected, permitted phones can exchange live PTT audio, text, voice notes, photos, and videos. Recipients reserve an audio floor before a burst starts; capture stops if a recipient becomes unavailable, permission expires, or the transfer stalls.
-- Completed messages and recordings sync to the organisation server after recovery. Signed content, device identity checks, hashes, and stable IDs protect transfers and deduplicate retries.
-- Offline credentials last up to eight hours. Permission changes, acknowledgement, private calls, and issue/check-in server operations need server access. Nearby is direct peer-to-peer communication, not multi-hop venue mesh, and the browser does not implement Nearby.
+## Problem Statement
 
-### Venue operations and issue threads
+Large conferences, hackathons, malls, and hospitals still rely on walkie-talkies for team coordination, which require cost, charging, and maintenance while supporting only voice communication.
 
-- Admins can upload multiple floor plans and place, rename, and edit named zones. Supported floor-plan image formats are PNG, JPEG, and WebP, up to 5 MB.
-- Volunteers can check in to a floor and zone independently of team assignment. The app shows when a location was last reported; delayed offline check-ins cannot overwrite a newer confirmed location.
-- Operations shows connected on-duty staffing by location, unresolved issue counts, and issue markers. Location counts deduplicate volunteers and identify unknown, disconnected, or last-reported positions.
-- Staff can create issue threads with a title, description, normal/high/urgent priority, permitted audience, optional location, and photo. Admins can target a team; staff can report to their team or everyone according to access rules.
-- Threads support chronological replies, filters, assignment claims, admin reassignment, resolution, and reopening. A claim or status change takes effect only after server confirmation; concurrent stale changes are rejected. Resolved issues remain available in history and leave the unresolved map counts.
-- Thread and image access is restricted by the issue audience and current operational assignment. Offline queues support new reports and replies, while ownership and lifecycle changes require the server.
+Build a communicator app that runs on staff members’ phones, providing instant push-to-talk for individuals or team channels, along with chat, photo/video sharing, and voice/video calls in a familiar messaging interface.
 
-### Speech, dictation, and Android controls
+The system must operate as a closed organisational network, where only authorised members can join and admins manage teams and channels. Provide an admin view to monitor online users and active channels, with the ability to broadcast to everyone.
 
-- Saved push-to-talk recordings, audio notes, and received Nearby notes can receive automatic English transcripts using Vosk. Android recognition runs on-device; the server can process uploaded recordings locally with Vosk and FFmpeg. No cloud speech service is required.
-- Transcripts remain attached to their original audio entry alongside replay. Pending, processing, unavailable, and failed states are visible, and failed recognition can be retried. Recognition does not block acknowledgement.
-- Offline dictation creates an editable draft in chat, issue descriptions, and replies. Dictation pauses without discarding earlier words, is bounded to 60 seconds, and never sends text until the user chooses to send.
-- Optional Volume Down push-to-talk uses the same permission and media controls as the on-screen TALK button; Volume Up remains available for listening volume. Input feedback follows actual transmission state, and cancellation, duty loss, calls, and a 30-second watchdog stop capture.
-- An optional accessibility service can deliver hardware key events in the background. Pocket Mode provides a dim, black, keep-awake screen for demonstrations. True locked-screen key behavior depends on the phone and its power settings.
-- The app has Comms, Threads, and People navigation, with Settings in the header. People lists channels and approved staff for conversation selection. Comms separates Live Voice from Message Log; it shows the selected recipient and connection state, and offers context-aware PTT status. The log includes replay, transcripts, archive controls, calls, dictation, and attachments.
+Prefer direct device-to-device communication where possible, while handling network congestion, patchy connectivity, and locked phones. All messages and media must remain within the organisation’s own infrastructure.
 
-### Browser console
+## Solution
 
-The React console provides Operations, Threads, Communications, People, Organisation, and Settings views. Admins manage organisation access, devices, teams, assignments, duty admin, broadcasts, floors, and zones. Staff use permitted conversations, issue workflows, check-ins, and media. The console supports live media through LiveKit but does not provide Android Nearby transport.
+Kettoo combines fast voice communication with a persistent message log. Staff hold TALK on a permitted channel or private exchange, send messages and attachments, or start a private voice/video call. Saved PTT bursts remain available for replay, local English transcription and personal acknowledgement/archive.
 
-Under Organisation > Volunteers & device approval, **Add volunteer** creates an approved staff account with a name, email, and password of at least 12 characters. **Edit login** updates a volunteer's email and optionally sets a new password; leave the password blank to keep it. Password resets end active sessions and live communication. Account IDs, channel assignments, location check-ins, and history are preserved, and device approval remains a separate control. Administrator accounts cannot be edited through these volunteer controls.
+Administrators approve staff accounts and devices, manage channel memberships, monitor presence and audio readiness, designate a duty-admin device, and broadcast to one team, selected teams or everyone. Volunteers can belong to multiple channels; private live PTT follows teammate/duty-admin permissions, while private messaging and calls have separate access rules.
 
-### Not included
+The organisation hosts the API, SQLite database, attachment storage and LiveKit media service. Vosk speech recognition runs locally on Android or on the organisation's server without a cloud speech API. The clients retain pending work in Room or IndexedDB, and permitted Android phones automatically discover and authenticate direct Nearby peers during supported outages.
 
-Multi-hop mesh forwarding, cloud AI, automatic staff allocation or escalation, GPS dispatch, offline private calls, group video calls, always-open microphone, and guaranteed locked-screen hardware PTT are outside the current implementation. Device-specific behavior such as background keys, audio routing, recognition accuracy, and power management should be acceptance-tested on the phones used by an organisation.
+Additional coordination tools include floor plans, named zones, staff check-ins and issue threads with confirmed ownership, replies and resolution. These extend the communicator brief by linking reports to a place and an accountable response.
 
-## Project layout
+**Current scope:** Kettoo is a development/demo implementation, version **0.3.0**. Nearby is direct peer-to-peer fallback on Android, not multi-hop mesh. Upload scheduling, speaking leases and bounded transfers address specific communication conflicts, but realistic network congestion, venue-scale capacity and universal locked-phone behaviour still need acceptance testing. Pocket Mode keeps a dim screen awake for hardware PTT; it does not guarantee transmission from a truly locked phone.
 
-```text
-android/   Native Android app and device acceptance tests
-server/    TypeScript API, SQLite storage, media access and speech worker
-web/       React staff and administration console
-deploy/    LiveKit, HTTPS proxy and local launch configuration
-scripts/   Speech setup and device test helpers
-docs/      Nearby behaviour and UI review notes
+---
+
+# Demo
+
+### Demo Video
+
+**Google Drive demo video link: To be added.**
+
+### Screenshots
+
+Actual installed-app screenshots from the Android UI review. These captures show historical display states, including off-duty and Nearby-off states.
+
+**Live Voice and channel communication**
+
+![Kettoo Android Live Voice screen](./artifacts/ui-review/2026-10-10/cph2613-comms-installed-final.png)
+
+**Message Log and keyboard-safe composer**
+
+![Kettoo Message Log with keyboard visible](./artifacts/ui-review/2026-10-10/cph2613-message-log-keyboard-final.png)
+
+**Hardware PTT and Nearby settings**
+
+![Kettoo Settings showing hardware PTT and Nearby controls](./artifacts/ui-review/2026-10-10/cph2613-settings-installed-final-middle.png)
+
+---
+
+# Live Project
+
+**Hosted demo URL: To be added.**
+
+Kettoo currently runs on the organisation's own infrastructure. After local setup, open the browser console at [http://127.0.0.1:8787](http://127.0.0.1:8787). This address works on the machine running the server; phones need a reachable, trusted organisation server/media address.
+
+---
+
+# Technical Implementation
+
+## Technologies Used
+
+| Category | Technologies |
+|----------|--------------|
+| **Frontend** | Native Android: Kotlin and Jetpack Compose. Browser: React, TypeScript and Vite. |
+| **Backend** | Node.js 24+, Fastify, TypeScript, authenticated HTTP and WebSocket events. |
+| **Database** | SQLite on the server, Room on Android, IndexedDB in the browser. |
+| **APIs / Services** | Self-hosted LiveKit for live audio/video; Google Nearby Connections for direct Android communication. |
+| **AI / ML** | Local Vosk English speech recognition; FFmpeg for uploaded audio processing. |
+| **DevOps / Deployment** | Caddy HTTPS proxy, Docker Compose media/proxy configuration, PowerShell and Windows launch helpers. |
+| **Other Tools** | Gradle, Android lint/instrumentation tests, TypeScript and Node test runner. |
+
+## System Architecture
+
+```mermaid
+flowchart TB
+    Android[Staff Android app]
+    Browser[Staff and admin browser console]
+
+    subgraph Organisation[Organisation infrastructure]
+        API[Fastify API and WebSocket events]
+        Store[(SQLite and private attachments)]
+        Media[Self-hosted LiveKit]
+        Speech[Local Vosk and FFmpeg worker]
+    end
+
+    Android -->|HTTP and WebSocket| API
+    Browser -->|HTTP and WebSocket| API
+    API --> Store
+    API -->|Permissions and room grants| Media
+    Android <-->|Live audio and video| Media
+    Browser <-->|Live audio and video| Media
+    Speech --> Store
+    Android --> Cache[Room cache and pending operations]
+    Browser --> WebCache[IndexedDB cache and pending operations]
+    Android <-->|Direct Nearby during outages| Peer[Approved Android peer]
 ```
 
-## Run the server and web app
+The server checks account/device approval, conversation membership, issue audiences and media permissions. Speaking leases serialize channel transmitters, while clients coordinate microphone ownership, call priority and receive routing. Stable message/operation IDs support retry deduplication.
 
-Requires **Node.js 24 or newer**. From the repository root:
+Nearby peers authenticate enrolled device keys and organisation-signed credentials, verify transferred content, and synchronise completed messages after recovery. Maps, check-ins and issue operations use server queues rather than peer replication. Offline credentials expire after up to eight hours; total outages prevent immediate propagation of new revocations.
 
-On Windows, double-click **`start.bat`**. It installs missing dependencies, builds the API and web dashboard, starts the local LiveKit audio service, prepares three volunteer test accounts, and opens the dashboard. The API serves the built web app; a separate Vite process is not needed. Existing `.env`, accounts, maps, messages, and passwords are preserved. Services run in the background; logs and the generated LiveKit configuration are under `DATA_DIR/runtime`.
+## Key Features
 
-The launcher uses `tools/livekit-server.exe` or LiveKit on PATH and the credentials/address in `.env`. For a fresh checkout without `.env`, it creates local settings and saves the initial admin sign-in to `data/local-admin-sign-in.txt`. The default media address for a fresh checkout is localhost; set `LIVEKIT_URL` to the server's LAN address when testing with phones.
+- **Push-to-talk:** permitted channel/private exchanges, explicit transmission state, server speaking leases, 30-second ceiling and replay.
+- **Messaging and attachments:** text, photos, videos and voice notes with history, validated uploads and delivery states. Limits: images 5 MB, videos 10 MB, audio 1 MB.
+- **Private calls:** voice/video ringing, acceptance, rejection, ending and busy handling. Conserve Data disables video.
+- **Closed organisational access:** staff account/device approval, revocation, multiple channel memberships and server-enforced permissions.
+- **Admin monitoring and broadcasts:** connected/on-duty/media-ready/busy states, last seen, duty-admin exchanges and selected/all-staff broadcasts.
+- **Connectivity recovery:** durable Room/IndexedDB queues, direct Android Nearby live PTT/media and later deduplicated server synchronisation.
+- **Local speech and archive:** English transcripts of saved audio, editable offline dictation on Android and personal acknowledge/archive.
+- **Field controls:** optional Volume Down PTT, audio routing, background key service and Pocket Mode.
+- **Venue coordination:** multiple floor plans, zones, check-ins, staffing visibility and issue reporting, claims, replies and resolution.
 
-Useful launcher options:
+Historical verification includes two-phone media and Nearby outage/recovery checks. A **34/34 backend test** run and server/browser builds passed during preparation of the project summary on 10 October 2026. This is a recorded snapshot, not a claim that every subsequent change was retested. See [verification notes](./VERIFICATION.md), [Phase 2](./overview_till_phase2.md), [Phase 3](./overview_phase3.md) and [Nearby failover](./docs/nearby-failover.md) for evidence and remaining checks.
 
-```bat
-start.bat -NoBrowser
-start.bat -SkipBuild
-start.bat -NoMedia -NoTestUsers
-stop.bat
-setup-test-users.bat --count 3
-setup-test-users.bat --approve-devices
+---
+
+# Setup Instructions
+
+## Prerequisites
+
+- Git and access to the private project repository.
+- Node.js **24 or newer** with npm.
+- For Android builds: JDK **17**, Android SDK platform **35** and the included Gradle wrapper. The app supports Android API **26+**.
+- For local speech setup: Python and internet access for the first model/runtime installation.
+- For live voice/video: a configured LiveKit server reachable by participating clients.
+- For the Docker deployment path: Docker with Compose and trusted HTTPS/DNS configuration.
+- For Nearby: compatible Android phones with the required Bluetooth, Wi-Fi and microphone permissions, approved devices and valid cached credentials.
+
+## Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/SteveSonyJacob/ketto_pvt.git
+cd ketto_pvt
 ```
 
-The test-account helper creates `vol1@kettoo.local`, `vol2@kettoo.local`, and `vol3@kettoo.local` with individually generated passwords, displays their credentials, and keeps them in the ignored `DATA_DIR/test-users.json`. Use the full email as the sign-in username. Re-running preserves passwords and existing accounts; `--count 5` adds accounts through Vol 5. Volunteer accounts created by the helper are approved, but their new devices still require approval. After their first sign-in, `--approve-devices` approves only these helper-owned test accounts' pending devices. Assign them to the desired channels under Organisation > Channels & memberships. Normal registrations still require approval.
+The repository is private, so the clone requires authorised GitHub access.
 
-The helper follows each account's ID if an admin changes its email. If its password has been reset, startup preserves it and displays “Changed by admin; use the current password” instead of an outdated password.
-
-For manual startup:
+### 2. Install Dependencies and Build
 
 ```powershell
 npm ci
 npm run build
-$env:ADMIN_PASSWORD = 'use-a-unique-password-of-at-least-12-characters'
+```
+
+This builds the TypeScript API and browser console.
+
+### 3. Start a Local Preview
+
+On Windows, run:
+
+```powershell
+.\start.bat
+```
+
+The launcher installs missing dependencies, builds the app, starts the available local LiveKit service, prepares volunteer test accounts and opens the dashboard. For a fresh checkout without `.env`, it creates local settings and stores the initial admin sign-in in the ignored `data/local-admin-sign-in.txt`. Keep generated account credentials private. The test helper approves its volunteer accounts; newly registered volunteer devices still need approval.
+
+Stop the local services with:
+
+```powershell
+.\stop.bat
+```
+
+Alternatively, start only the API and built browser app manually:
+
+```powershell
+$env:ADMIN_PASSWORD = 'choose-a-unique-password-at-least-12-characters-long'
 $env:DATA_DIR = './data'
 npm start
 ```
 
-Open `http://127.0.0.1:8787`. The first administrator email defaults to `admin@kettoo.local`; set `ADMIN_EMAIL` before first start to change it. Keep `.env`, the data directory, database, signing key, and credentials private. Existing installations should keep their data directory and signing key when upgrading.
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787). On first initialisation, the administrator email defaults to `admin@kettoo.local`; set `ADMIN_EMAIL` before the first start to change it. Manual API startup does not launch LiveKit. Live voice/video needs the separate configured media service.
 
-For development, run `npm run dev -w server` and `npm run dev -w web` in separate terminals. The Vite server proxies `/api` to port 8787. The browser console works without LiveKit; configure LiveKit to enable live audio and video.
+### 4. Configure Organisation Deployment
 
-## Build Android
+Copy `.env.example` to `.env`, set unique administrator and LiveKit secrets, and configure:
 
-Requires JDK 17, Android SDK platform 35, and the included Gradle 8.11.1 wrapper. Offline speech model setup requires internet the first time; the runtime and model are kept under ignored `data/speech`.
+- `APP_ORIGIN` and trusted HTTPS for the application.
+- `LIVEKIT_URL` reachable by browsers and phones, with matching server credentials.
+- The media host address in `deploy/livekit.yaml`.
+- Organisation DNS, certificate trust and intended network access.
+- A private `DATA_DIR`, plus backups of its database, attachments and signing identity.
+
+After configuration:
+
+```powershell
+docker compose -f deploy/compose.yaml up -d
+.\deploy\start.ps1
+```
+
+The Compose configuration starts LiveKit and Caddy; the PowerShell script starts the API using `.env`. The API must already be built. Existing installations should preserve their data directory and signing key when upgrading.
+
+### 5. Set Up Speech and Build Android
+
+From the repository root:
 
 ```powershell
 .\scripts\setup-speech.ps1
@@ -127,14 +233,29 @@ cd android
 .\gradlew.bat assembleDebug lintDebug
 ```
 
-The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. Sign in and approve the device through the organisation administrator. Grant microphone, notification, and Nearby permissions as requested; camera permission is used for video calls. Start duty before transmitting. Hold TALK and wait for **TRANSMITTING** before speaking.
+The debug APK is generated at `android/app/build/outputs/apk/debug/app-debug.apk`. The setup places the Vosk English model/runtime under ignored `data/speech`, and the Android build packages the model for on-device recognition.
 
-## Organisation deployment
+Install the APK, enter the reachable organisation server address, sign in and approve the device. Grant the required permissions and start duty. Select a permitted conversation, hold TALK and wait for **TRANSMITTING** before speaking. Enable Nearby on participating approved phones before demonstrating direct failover.
 
-Copy `.env.example` to `.env` and set unique administrator and LiveKit secrets. Set the media host address in `deploy/livekit.yaml`, matching LiveKit credentials in both configurations, and configure `kettoo.local` / `media.kettoo.local` DNS and trusted HTTPS certificates. `deploy/compose.yaml` runs LiveKit and Caddy; `deploy/start.ps1` starts the API. Restrict network access to the intended organisation. See the deployment and trust details in [Nearby failover](docs/nearby-failover.md) and the [Phase 3 overview](overview_phase3.md).
+### 6. Development and Verification
 
-## Verification and project notes
+For development, run these in separate terminals:
 
-Run the backend suite with `npm test` and build both browser and server with `npm run build`. Android lint and debug builds use the Gradle command above. Real-media, speech, and physical-device checks require their respective services, model, or connected test phones; consult [Phase 3](overview_phase3.md), [Phase 2](overview_till_phase2.md), and [the Phase 1 verification record](VERIFICATION.md) for what was checked and what still needs device acceptance. These records span different builds, so historical checks do not imply every feature was re-tested in the current build.
+```powershell
+npm run dev -w server
+```
 
-Main components: Kotlin/Jetpack Compose, Room, React/TypeScript, Fastify, SQLite, LiveKit, Nearby Connections, and Vosk. Speech recognition runs locally without a cloud speech service. See [speech runtime and licensing](server/speech/README.md). The project is distributed under the [MIT License](LICENSE).
+```powershell
+npm run dev -w web
+```
+
+Run the backend suite and production builds:
+
+```powershell
+npm test
+npm run build
+```
+
+Real-media, speech and physical-device acceptance checks require their services, speech model or connected phones. Venue-scale load, sustained screen-off operation, locked-screen hardware PTT, radio range and noisy-room recognition need testing on the intended deployment devices.
+
+For the full operating reference, see [README.md](./README.md). The project uses the [MIT License](./LICENSE), with speech licensing documented in [server/speech/README.md](./server/speech/README.md).
